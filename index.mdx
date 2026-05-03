@@ -1,133 +1,94 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
-icon: 'star'
+title: "Typia: Super-fast TypeScript Runtime Validators"
+description: "Typia transforms TypeScript types into runtime validators, JSON serializers, LLM schemas, and Protocol Buffer codecs — no separate schema definitions needed."
 ---
 
-## Setting up
+Typia is a TypeScript transformer library that generates runtime validation, serialization, and schema code directly from your TypeScript types at compile time. There are no decorators, no class inheritance, and no separate schema definitions — just pure TypeScript types.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Get Started" icon="rocket" href="/introduction">
+    Learn what Typia is and why it's 20,000x faster than class-validator.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Setup" icon="gear" href="/setup">
+    Install Typia and configure your TypeScript project in minutes.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Runtime Validators" icon="shield-check" href="/validators/overview">
+    Validate, assert, and type-guard at runtime with a single line of code.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="LLM & AI Integration" icon="brain" href="/llm/overview">
+    Build reliable AI function calling and structured output with 100% accuracy.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why Typia?
 
-Everything you need to create world-class documentation.
+Traditional validation libraries require you to maintain separate schema definitions alongside your TypeScript types. Typia eliminates that duplication — your types **are** the schema.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Validators" icon="shield" href="/validators/overview">
+    Runtime type checking 20,000x faster than class-validator, with detailed error paths.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="JSON" icon="brackets-curly" href="/json/schema">
+    Type-safe JSON parse and stringify, 200x faster than class-transformer.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Protocol Buffer" icon="server" href="/protobuf/overview">
+    Encode and decode Protocol Buffer messages from TypeScript types.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Random Generator" icon="dice" href="/utilities/random">
+    Generate random data conforming exactly to your TypeScript types.
   </Card>
-</Columns>
+</CardGroup>
 
-## Make your content agent ready
+## Quick example
 
-Make your docs work for humans and AI agents alike.
+```typescript
+import typia, { tags } from "typia";
 
-<Columns cols={2}>
-  <Card
-    title="Prompt component"
-    icon="robot"
-    href="/agent-ready/prompt"
-  >
-    Embed shareable AI prompts readers can copy or open in Cursor.
-  </Card>
-  <Card
-    title="Visibility"
-    icon="eye"
-    href="/agent-ready/visibility"
-  >
-    Show different content to humans and agents reading your docs.
-  </Card>
-  <Card
-    title="Contextual menu"
-    icon="bolt"
-    href="/agent-ready/contextual"
-  >
-    Give readers one-click access to Claude, ChatGPT, Cursor, and more.
-  </Card>
-  <Card
-    title="AI coding tools"
-    icon="wand-magic-sparkles"
-    href="/ai-tools/claude-code"
-  >
-    Set up Claude Code, Cursor, or Windsurf with Mintlify's skill.
-  </Card>
-</Columns>
+interface IMember {
+  id: string & tags.Format<"uuid">;
+  email: string & tags.Format<"email">;
+  age: number & tags.Minimum<18> & tags.Maximum<100>;
+}
 
-## Need inspiration?
+// One-line runtime validation — no extra schema needed
+const member = typia.assert<IMember>(request.body);
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+// Type-safe JSON serialization
+const json = typia.json.assertStringify<IMember>(member);
+```
+
+<Steps>
+  <Step title="Install Typia">
+    Add Typia to your project using your preferred package manager.
+    ```bash
+    npm install typia
+    npx typia setup
+    ```
+  </Step>
+  <Step title="Write TypeScript types">
+    Define your data shapes as plain TypeScript interfaces — no decorators required.
+  </Step>
+  <Step title="Call Typia functions">
+    Use `typia.assert<T>()`, `typia.is<T>()`, `typia.validate<T>()`, and more with your types.
+  </Step>
+  <Step title="Run your build">
+    Typia's transformer generates optimized runtime code at compile time — zero runtime overhead.
+  </Step>
+</Steps>
+
+## Integrations
+
+<CardGroup cols={2}>
+  <Card title="NestJS" icon="n" href="/integrations/nestjs">
+    Automatic request validation with NestJS pipes and decorators.
+  </Card>
+  <Card title="Vercel AI SDK" icon="triangle" href="/integrations/vercel-ai">
+    Structured output and function calling with the Vercel AI SDK.
+  </Card>
+  <Card title="LangChain" icon="link" href="/integrations/langchain">
+    Type-safe tool definitions for LangChain agents.
+  </Card>
+  <Card title="MCP" icon="plug" href="/integrations/mcp">
+    Model Context Protocol server tools with automatic type validation.
+  </Card>
+</CardGroup>

@@ -1,0 +1,308 @@
+---
+title: "Generate Random Mock Data with typia.random<T>()"
+description: "Generate random mock data conforming to any TypeScript type, with type tag constraints, custom IRandomGenerator support, and a reusable factory function."
+---
+
+Typia's `random` module lets you generate random data that exactly satisfies any TypeScript type at compile time. Rather than hand-crafting fake objects for tests or fuzzing, you declare the type and Typia produces conforming values automatically — respecting primitives, arrays, union types, optional fields, and type tag constraints.
+
+## Basic usage
+
+Call `typia.random<T>()` with your type as the generic argument. No input is required — Typia generates all values from scratch.
+
+```typescript
+import typia, { tags } from "typia";
+
+interface IUser {
+  id: string & tags.Format<"uuid">;
+  email: string & tags.Format<"email">;
+  age: number & tags.Minimum<18> & tags.Maximum<100>;
+  name: string & tags.MinLength<2> & tags.MaxLength<50>;
+  active: boolean;
+}
+
+const user: IUser = typia.random<IUser>();
+// {
+//   id: "550e8400-e29b-41d4-a716-446655440000",
+//   email: "random@example.com",
+//   age: 42,
+//   name: "Rqb",
+//   active: true
+// }
+```
+
+<Note>
+The generic argument `T` is required. Calling `typia.random()` without a type argument is a compile-time error.
+</Note>
+
+## What gets generated
+
+Typia generates **only primitive data**. Methods on class instances are ignored. If your type `T` has a `toJSON()` method, Typia generates the return type of `toJSON()` instead of the class shape.
+
+| TypeScript construct | Random behavior |
+|---|---|
+| `string` | Random string |
+| `number` | Random finite number |
+| `boolean` | Random `true` or `false` |
+| `bigint` | Random bigint |
+| `null` / `undefined` | Literal value |
+| Object / interface | Object with all properties populated |
+| Array | Array with a random number of elements |
+| Union (`A \| B`) | Randomly selects one member |
+| Optional (`prop?`) | Randomly present or absent |
+| Class instance | Plain object (methods stripped) |
+| `toJSON()` return type | Result type is generated instead |
+
+## Type tag constraints
+
+When your type uses typia's type tags, `random` respects them. Generated values always satisfy constraints like minimum/maximum length, numeric bounds, regex patterns, and format specifiers.
+
+```typescript
+import typia, { tags } from "typia";
+
+interface IProduct {
+  sku: string & tags.Pattern<"^[A-Z]{3}-[0-9]{4}$">;
+  price: number & tags.Minimum<0.01> & tags.Maximum<9999.99>;
+  stock: number & tags.Type<"uint32"> & tags.Maximum<1000>;
+  createdAt: string & tags.Format<"date-time">;
+}
+
+const product = typia.random<IProduct>();
+// sku matches /^[A-Z]{3}-[0-9]{4}$/
+// price is between 0.01 and 9999.99
+// stock is a non-negative integer ≤ 1000
+// createdAt is an ISO 8601 datetime string
+```
+
+Supported tag constraints:
+
+| Tag | Effect on random |
+|---|---|
+| `MinLength<N>` / `MaxLength<N>` | String length range |
+| `Minimum<N>` / `Maximum<N>` | Numeric value range |
+| `ExclusiveMinimum<N>` / `ExclusiveMaximum<N>` | Exclusive numeric bounds |
+| `MinItems<N>` / `MaxItems<N>` | Array length range |
+| `Pattern<Regex>` | String matching the regex |
+| `Format<"email">`, `Format<"uuid">`, etc. | Properly formatted strings |
+| `Type<"int32">`, `Type<"uint64">`, etc. | Integer type constraints |
+
+## The `IRandomGenerator` interface
+
+Pass a `Partial<IRandomGenerator>` to override how specific value types are generated. Any methods you omit fall back to Typia's built-in defaults.
+
+```typescript
+import typia, { IRandomGenerator, tags } from "typia";
+
+const customGenerator: Partial<IRandomGenerator> = {
+  // Always generate a specific email domain
+  email: () => `user${Math.floor(Math.random() * 1000)}@mycompany.com`,
+
+  // Generate integers in a tighter range
+  integer: (schema) => Math.floor(Math.random() * 10),
+
+  // Always produce short arrays
+  array: ({ element }) => Array.from({ length: 2 }, (_, i) => element(i, 2)),
+};
+
+interface IUser {
+  id: string & tags.Format<"uuid">;
+  email: string & tags.Format<"email">;
+  score: number & tags.Type<"int32">;
+  tags: string[];
+}
+
+const user = typia.random<IUser>(customGenerator);
+```
+
+### `IRandomGenerator` method reference
+
+<Tabs>
+  <Tab title="Primitives">
+
+| Method | Signature | Description |
+|---|---|---|
+| `boolean` | `() => boolean \| undefined` | Generates a random boolean |
+| `number` | `(schema: INumber) => number` | Generates a float within schema constraints |
+| `integer` | `(schema: IInteger) => number` | Generates an integer within schema constraints |
+| `bigint` | `(schema: IInteger) => bigint` | Generates a bigint within schema constraints |
+| `string` | `(schema: IString) => string` | Generates a string within schema constraints |
+| `array` | `(schema) => T[]` | Generates an array using the provided element factory |
+
+  </Tab>
+  <Tab title="String formats">
+
+| Method | Generated format |
+|---|---|
+| `uuid()` | UUID v4 string |
+| `email()` | Email address |
+| `hostname()` | Hostname |
+| `ipv4()` | IPv4 address |
+| `ipv6()` | IPv6 address |
+| `uri()` | URI |
+| `url()` | URL |
+| `datetime(props?)` | ISO 8601 datetime |
+| `date(props?)` | ISO 8601 date |
+| `time()` | ISO 8601 time |
+| `duration()` | ISO 8601 duration |
+| `pattern(regex)` | String matching a regex |
+| `byte()` | Base64-encoded string |
+| `password()` | Password-like string |
+
+  </Tab>
+</Tabs>
+
+## Factory function: `typia.createRandom<T>()`
+
+When you need to generate many instances of the same type, use `createRandom` to produce a reusable function. This avoids recompiling the generation logic on every call.
+
+```typescript
+import typia, { tags } from "typia";
+
+interface IOrder {
+  orderId: string & tags.Format<"uuid">;
+  amount: number & tags.Minimum<1> & tags.Maximum<10000>;
+  items: Array<{
+    productId: string & tags.Format<"uuid">;
+    quantity: number & tags.Type<"uint32"> & tags.Minimum<1>;
+  }>;
+}
+
+// Create a reusable generator
+const generateOrder = typia.createRandom<IOrder>();
+
+// Call many times without overhead
+const orders = Array.from({ length: 100 }, generateOrder);
+```
+
+You can also pass a custom generator to `createRandom`:
+
+```typescript
+const customGenerator: Partial<IRandomGenerator> = {
+  integer: (schema) => Math.floor(Math.random() * 5) + 1,
+};
+
+const generateOrder = typia.createRandom<IOrder>(customGenerator);
+```
+
+## Real-world examples
+
+<CodeGroup>
+
+```typescript Random user for testing
+import typia, { tags } from "typia";
+
+interface IUser {
+  id: string & tags.Format<"uuid">;
+  email: string & tags.Format<"email">;
+  username: string & tags.MinLength<3> & tags.MaxLength<20>;
+  age: number & tags.Minimum<18> & tags.Maximum<120>;
+  role: "admin" | "editor" | "viewer";
+  preferences: {
+    newsletter: boolean;
+    theme: "light" | "dark";
+  };
+}
+
+// Generate a single test user
+const testUser = typia.random<IUser>();
+
+// Generate a batch of 50 users
+const generateUser = typia.createRandom<IUser>();
+const users = Array.from({ length: 50 }, generateUser);
+```
+
+```typescript Fuzzing with constrained arrays
+import typia, { tags } from "typia";
+
+interface IApiRequest {
+  endpoint: string & tags.Pattern<"^/[a-z]([a-z0-9/-]*[a-z0-9])?$">;
+  method: "GET" | "POST" | "PUT" | "DELETE";
+  headers: Array<{
+    name: string & tags.MinLength<1> & tags.MaxLength<64>;
+    value: string & tags.MaxLength<256>;
+  }> & tags.MaxItems<10>;
+  body?: string;
+}
+
+// Random requests that conform to the API contract
+for (let i = 0; i < 1000; i++) {
+  const req = typia.random<IApiRequest>();
+  processRequest(req); // guaranteed valid shape
+}
+```
+
+```typescript toJSON() return type handling
+import typia, { tags } from "typia";
+
+class Money {
+  constructor(
+    private amount: number,
+    private currency: string,
+  ) {}
+
+  toJSON() {
+    return { amount: this.amount, currency: this.currency };
+  }
+}
+
+// typia generates { amount: number, currency: string }
+// rather than trying to instantiate Money
+const randomMoney = typia.random<Money>();
+```
+
+</CodeGroup>
+
+## Use cases
+
+<Tabs>
+  <Tab title="Unit testing">
+
+Use `typia.random<T>()` to generate valid fixtures without maintaining hand-written mock factories. Combined with `typia.createRandom<T>()`, you can seed test suites with hundreds of structurally valid objects.
+
+```typescript
+describe("UserService", () => {
+  const generateUser = typia.createRandom<IUser>();
+
+  it("should save and retrieve a user", async () => {
+    const user = generateUser();
+    await service.save(user);
+    const found = await service.findById(user.id);
+    expect(found).toEqual(user);
+  });
+});
+```
+
+  </Tab>
+  <Tab title="Property-based testing">
+
+Combine with a property-based testing framework to verify invariants hold across a wide range of inputs:
+
+```typescript
+import typia from "typia";
+
+// Verify that serialization round-trips are lossless
+for (let i = 0; i < 10_000; i++) {
+  const original = typia.random<IProduct>();
+  const serialized = typia.json.stringify<IProduct>(original);
+  const parsed = typia.json.parse<IProduct>(serialized);
+  // Deep equality holds for all generated inputs
+  assert.deepEqual(original, parsed);
+}
+```
+
+  </Tab>
+  <Tab title="Development mock data">
+
+Seed databases or development environments with realistic-looking but random data. Type tags ensure formats like emails, UUIDs, and phone numbers look genuine.
+
+```typescript
+const seedDatabase = typia.createRandom<IDatabaseSeed>();
+const records = Array.from({ length: 500 }, seedDatabase);
+await db.insertMany(records);
+```
+
+  </Tab>
+</Tabs>
+
+<Warning>
+`typia.random<T>()` is a compile-time transform. You must configure Typia's TypeScript transformer (via `ts-patch`, `ttypescript`, or the Vite/webpack plugin) before using it. See [Setup](/setup) for details.
+</Warning>

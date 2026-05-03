@@ -1,0 +1,311 @@
+---
+title: "JSON Schema Generation from TypeScript Types"
+description: "Generate OpenAPI-compatible JSON schemas from TypeScript types using typia.json.schema, schemas, and application — no separate schema definitions needed."
+---
+
+Typia's JSON schema functions generate OpenAPI-compatible JSON schemas directly from TypeScript types at compile time. This page covers `typia.json.schema<T>()`, `typia.json.schemas<Types>()`, and `typia.json.application<Class>()` — what they return, how OpenAPI version selection works, and how to use the output with OpenAPI tooling.
+
+<Note>
+  All JSON schema functions are compile-time transformers. You must have the Typia transformer configured in your build tool. See [Setup](/setup) for details.
+</Note>
+
+## How it works
+
+Typia analyzes your TypeScript types at compile time and emits optimized JSON schema objects. Named types (interfaces, type aliases) are stored in a shared `components` object and referenced via `$ref`, which avoids duplication and supports recursive types.
+
+The output conforms to either OpenAPI 3.0 or 3.1 — you choose via a generic parameter.
+
+## `typia.json.schema<T>()`
+
+Generates a single JSON schema unit for one TypeScript type `T`.
+
+```typescript
+function schema<
+  Type extends unknown,
+  Version extends "3.0" | "3.1" = "3.1",
+>(): IJsonSchemaUnit<Version, Type>;
+```
+
+<ParamField path="Type" type="generic" required>
+  The TypeScript type to generate a schema for.
+</ParamField>
+
+<ParamField path="Version" type='"3.0" | "3.1"' default='"3.1"'>
+  OpenAPI version. `"3.1"` supports tuple types and aligns with JSON Schema draft 2020-12. `"3.0"` offers broader compatibility with older tooling.
+</ParamField>
+
+**Returns** `IJsonSchemaUnit<Version, Type>` — an object with:
+- `version`: the OpenAPI version string
+- `schema`: the main JSON schema for the type
+- `components`: shared schema definitions for `$ref` references
+
+### Example
+
+```typescript
+import typia from "typia";
+
+interface IUser {
+  id: number;
+  name: string;
+  email: string;
+  role: "admin" | "member" | "guest";
+}
+
+const unit = typia.json.schema<IUser>();
+console.log(JSON.stringify(unit, null, 2));
+```
+
+Output (OpenAPI 3.1):
+
+```json
+{
+  "version": "3.1",
+  "schema": {
+    "$ref": "#/components/schemas/IUser"
+  },
+  "components": {
+    "schemas": {
+      "IUser": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "name": { "type": "string" },
+          "email": { "type": "string" },
+          "role": {
+            "oneOf": [
+              { "const": "admin" },
+              { "const": "member" },
+              { "const": "guest" }
+            ]
+          }
+        },
+        "required": ["id", "name", "email", "role"]
+      }
+    }
+  }
+}
+```
+
+### OpenAPI version differences
+
+<Tabs>
+  <Tab title="OpenAPI 3.1 (default)">
+    ```typescript
+    // Nullable expressed as type array (JSON Schema 2020-12)
+    const unit = typia.json.schema<string | null, "3.1">();
+    // schema: { "type": ["string", "null"] }
+    ```
+
+    - Tuple types are supported
+    - `const` values are used for literals
+    - `type` arrays express nullable types
+    - Aligns with JSON Schema draft 2020-12
+  </Tab>
+  <Tab title="OpenAPI 3.0">
+    ```typescript
+    // Nullable expressed with nullable: true (OpenAPI 3.0 style)
+    const unit = typia.json.schema<string | null, "3.0">();
+    // schema: { "type": "string", "nullable": true }
+    ```
+
+    - Nullable types use `nullable: true`
+    - Broader compatibility with existing OpenAPI 3.0 tools
+    - Tuple types are not supported
+  </Tab>
+</Tabs>
+
+## `typia.json.schemas<Types>()`
+
+Generates schemas for multiple TypeScript types in a single call. All types share one `components` pool — useful when your types reference each other.
+
+```typescript
+function schemas<
+  Types extends unknown[],
+  Version extends "3.0" | "3.1" = "3.1",
+>(): IJsonSchemaCollection<Version, Types>;
+```
+
+<ParamField path="Types" type="generic tuple" required>
+  A tuple of TypeScript types to generate schemas for, e.g. `[IUser, IOrder, IProduct]`.
+</ParamField>
+
+<ParamField path="Version" type='"3.0" | "3.1"' default='"3.1"'>
+  OpenAPI version for the schema output.
+</ParamField>
+
+**Returns** `IJsonSchemaCollection<Version, Types>` — an object with:
+- `version`: the OpenAPI version string
+- `schemas`: array of schemas, one per input type (in the same order)
+- `components`: shared `$ref` definitions across all types
+
+### Example
+
+```typescript
+import typia from "typia";
+
+interface IOrder {
+  id: number;
+  user: IUser;
+  items: IOrderItem[];
+}
+
+interface IOrderItem {
+  productId: number;
+  quantity: number;
+}
+
+interface IUser {
+  id: number;
+  name: string;
+}
+
+const collection = typia.json.schemas<[IOrder, IUser, IOrderItem]>();
+// collection.schemas[0] is the schema for IOrder
+// collection.schemas[1] is the schema for IUser
+// collection.schemas[2] is the schema for IOrderItem
+// collection.components holds shared definitions
+```
+
+## `typia.json.application<Class>()`
+
+Generates a function schema application from a TypeScript class or interface. This converts each method into a structured function definition with parameter and return type schemas.
+
+```typescript
+function application<
+  Class extends object,
+  Version extends "3.0" | "3.1" = "3.1",
+>(): IJsonSchemaApplication<Version, Class>;
+```
+
+<ParamField path="Class" type="generic" required>
+  The class or interface whose methods you want to convert to function schemas.
+</ParamField>
+
+<ParamField path="Version" type='"3.0" | "3.1"' default='"3.1"'>
+  OpenAPI version for the schema output.
+</ParamField>
+
+**Returns** `IJsonSchemaApplication<Version, Class>` — an object with:
+- `version`: the OpenAPI version string
+- `functions`: array of function definitions (name, parameters, return type, docs)
+- `components`: shared schema definitions for `$ref` references
+
+<Tip>
+  For LLM function calling with ChatGPT, Claude, or Gemini, use [`typia.llm.application<Class>()`](/llm/application) instead. It produces provider-specific schemas. Use `typia.json.application()` when you need raw OpenAPI function schemas for custom integrations or API documentation tools.
+</Tip>
+
+### Example
+
+```typescript
+import typia from "typia";
+
+interface IShoppingService {
+  /**
+   * Search for products by keyword.
+   * @param keyword Search term
+   * @param limit Maximum results to return
+   * @returns Matching products
+   */
+  searchProducts(keyword: string, limit: number): Promise<IProduct[]>;
+
+  /**
+   * Get a product by ID.
+   * @param id Product identifier
+   */
+  getProduct(id: number): Promise<IProduct | null>;
+}
+
+interface IProduct {
+  id: number;
+  name: string;
+  price: number;
+}
+
+const app = typia.json.application<IShoppingService>();
+// app.functions[0].name === "searchProducts"
+// app.functions[0].parameters[0].name === "keyword"
+// app.functions[0].parameters[0].schema === { type: "string" }
+// app.functions[0].output.schema === { ... IProduct[] schema ... }
+```
+
+## Interface reference
+
+### `IJsonSchemaUnit`
+
+```typescript
+interface IJsonSchemaUnit<Version, Type> {
+  version: Version;            // "3.0" or "3.1"
+  schema: IJsonSchema;         // main schema for the type
+  components: IComponents;     // shared $ref definitions
+  __type?: Type;               // phantom — always undefined at runtime
+}
+```
+
+### `IJsonSchemaCollection`
+
+```typescript
+interface IJsonSchemaCollection<Version, Types> {
+  version: Version;            // "3.0" or "3.1"
+  schemas: IJsonSchema[];      // one schema per type, in order
+  components: IComponents;     // shared $ref definitions
+  __types?: Types;             // phantom — always undefined at runtime
+}
+```
+
+### `IJsonSchemaApplication`
+
+```typescript
+interface IJsonSchemaApplication<Version, App> {
+  version: Version;
+  functions: IFunction[];      // one entry per public method
+  components: IComponents;     // shared $ref definitions
+  __application?: App;         // phantom — always undefined at runtime
+}
+```
+
+Each `IFunction` contains:
+- `name`: method name
+- `parameters`: array of `{ name, required, schema, description? }`
+- `output`: `{ schema, required, description? }` or `undefined` for `void`
+- `summary`, `description`, `deprecated`, `tags`: extracted from JSDoc
+
+## Using schemas with OpenAPI tools
+
+The `schema` and `components` output from these functions maps directly to what OpenAPI tools expect. You can compose a full OpenAPI 3.1 document:
+
+```typescript
+import typia from "typia";
+
+interface IUser {
+  id: number;
+  name: string;
+  email: string;
+}
+
+const { schema, components } = typia.json.schema<IUser>();
+
+const openApiDocument = {
+  openapi: "3.1.0",
+  info: { title: "My API", version: "1.0.0" },
+  components: {
+    schemas: components.schemas,
+  },
+  paths: {
+    "/users/{id}": {
+      get: {
+        responses: {
+          "200": {
+            content: {
+              "application/json": { schema },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+```
+
+<Warning>
+  The `__type` and `__types` phantom properties on `IJsonSchemaUnit` and `IJsonSchemaCollection` are always `undefined` at runtime. They exist only for TypeScript type inference — never read or serialize them.
+</Warning>

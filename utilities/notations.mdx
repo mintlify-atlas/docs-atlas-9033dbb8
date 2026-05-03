@@ -1,0 +1,428 @@
+---
+title: "Naming Convention Converters: camel, pascal, snake"
+description: "Convert TypeScript object property names between camelCase, PascalCase, and snake_case with full type safety, validation variants, and factory functions."
+---
+
+Typia's `notations` namespace provides compile-time-safe functions for converting object property names between different naming conventions. Each converter recursively renames properties across nested structures and returns a new object typed with the correct transformed type — `CamelCase<T>`, `PascalCase<T>`, or `SnakeCase<T>`. Validation variants let you combine convention conversion with type checking in a single call.
+
+## Why naming conversions matter
+
+APIs frequently use `snake_case` (Python, Ruby, PostgreSQL) while TypeScript frontends prefer `camelCase`. Manually writing conversion utilities is error-prone and type-unsafe. Typia generates the conversion code from your TypeScript types, ensuring the output type accurately reflects the renamed properties.
+
+```typescript
+// snake_case API response
+interface IApiUser {
+  user_id: string;
+  first_name: string;
+  last_name: string;
+  created_at: string;
+}
+
+// camelCase for your frontend model — type is CamelCase<IApiUser>
+// { userId: string; firstName: string; lastName: string; createdAt: string }
+const user = typia.notations.camel<IApiUser>(apiResponse);
+```
+
+---
+
+## `typia.notations.camel<T>()` — convert to camelCase
+
+Converts all property names (including nested objects and arrays) to `camelCase`. Returns a new object typed as `CamelCase<T>`.
+
+```typescript
+import typia from "typia";
+
+interface ISnakeUser {
+  user_id: number;
+  first_name: string;
+  last_name: string;
+  email_address: string;
+  created_at: string;
+  address: {
+    street_name: string;
+    zip_code: string;
+  };
+}
+
+const raw: ISnakeUser = {
+  user_id: 1,
+  first_name: "Alice",
+  last_name: "Smith",
+  email_address: "alice@example.com",
+  created_at: "2024-01-15T10:30:00Z",
+  address: { street_name: "Main St", zip_code: "10001" },
+};
+
+const user = typia.notations.camel<ISnakeUser>(raw);
+// {
+//   userId: 1,
+//   firstName: "Alice",
+//   lastName: "Smith",
+//   emailAddress: "alice@example.com",
+//   createdAt: "2024-01-15T10:30:00Z",
+//   address: { streetName: "Main St", zipCode: "10001" }
+// }
+```
+
+### Camel variants
+
+<Tabs>
+  <Tab title="camel (no validation)">
+
+```typescript
+import typia from "typia";
+
+const result = typia.notations.camel<T>(input);
+```
+
+Signature: `camel<T>(input: T): CamelCase<T>`
+
+  </Tab>
+  <Tab title="assertCamel">
+
+```typescript
+import typia from "typia";
+
+// Throws TypeGuardError on type mismatch, then converts
+const result = typia.notations.assertCamel<T>(input);
+```
+
+Signature: `assertCamel<T>(input: unknown, errorFactory?): CamelCase<T>`
+
+Throws `TypeGuardError` with `path`, `expected`, and `value` on first mismatch.
+
+  </Tab>
+  <Tab title="isCamel">
+
+```typescript
+import typia from "typia";
+
+// Returns null if input doesn't match T
+const result = typia.notations.isCamel<T>(input);
+if (result === null) {
+  console.error("Type mismatch — conversion not performed");
+}
+```
+
+Signature: `isCamel<T>(input: unknown): CamelCase<T> | null`
+
+  </Tab>
+  <Tab title="validateCamel">
+
+```typescript
+import typia from "typia";
+
+const result = typia.notations.validateCamel<T>(input);
+if (result.success) {
+  console.log(result.data); // CamelCase<T>
+} else {
+  console.error(result.errors); // IValidation.IError[]
+}
+```
+
+Signature: `validateCamel<T>(input: unknown): IValidation<CamelCase<T>>`
+
+  </Tab>
+</Tabs>
+
+### Camel factory functions
+
+```typescript
+import typia from "typia";
+
+const toCamel = typia.notations.createCamel<ISnakeUser>();
+const assertToCamel = typia.notations.createAssertCamel<ISnakeUser>();
+const isToCamel = typia.notations.createIsCamel<ISnakeUser>();
+const validateToCamel = typia.notations.createValidateCamel<ISnakeUser>();
+
+// Reuse across many objects
+const users = apiResponses.map(toCamel);
+```
+
+---
+
+## `typia.notations.pascal<T>()` — convert to PascalCase
+
+Converts all property names to `PascalCase`. Returns a new object typed as `PascalCase<T>`. Useful when integrating with C#/.NET APIs, XML schemas, or any convention that capitalizes every word.
+
+```typescript
+import typia from "typia";
+
+interface IConfig {
+  max_retries: number;
+  base_url: string;
+  timeout_ms: number;
+}
+
+const config = typia.notations.pascal<IConfig>({
+  max_retries: 3,
+  base_url: "https://api.example.com",
+  timeout_ms: 5000,
+});
+// { MaxRetries: 3, BaseUrl: "https://api.example.com", TimeoutMs: 5000 }
+```
+
+### Pascal variants
+
+<Tabs>
+  <Tab title="pascal (no validation)">
+
+```typescript
+import typia from "typia";
+
+const result = typia.notations.pascal<T>(input);
+```
+
+Signature: `pascal<T>(input: T): PascalCase<T>`
+
+  </Tab>
+  <Tab title="assertPascal">
+
+```typescript
+import typia from "typia";
+
+const result = typia.notations.assertPascal<T>(input);
+```
+
+Signature: `assertPascal<T>(input: unknown, errorFactory?): PascalCase<T>`
+
+  </Tab>
+  <Tab title="isPascal">
+
+```typescript
+import typia from "typia";
+
+const result = typia.notations.isPascal<T>(input);
+// CamelCase<T> | null
+```
+
+Signature: `isPascal<T>(input: unknown): PascalCase<T> | null`
+
+  </Tab>
+  <Tab title="validatePascal">
+
+```typescript
+import typia from "typia";
+
+const result = typia.notations.validatePascal<T>(input);
+// IValidation<PascalCase<T>>
+```
+
+Signature: `validatePascal<T>(input: unknown): IValidation<PascalCase<T>>`
+
+  </Tab>
+</Tabs>
+
+### Pascal factory functions
+
+```typescript
+import typia from "typia";
+
+const toPascal = typia.notations.createPascal<IConfig>();
+const assertToPascal = typia.notations.createAssertPascal<IConfig>();
+const isToPascal = typia.notations.createIsPascal<IConfig>();
+const validateToPascal = typia.notations.createValidatePascal<IConfig>();
+```
+
+---
+
+## `typia.notations.snake<T>()` — convert to snake_case
+
+Converts all property names to `snake_case`. Returns a new object typed as `SnakeCase<T>`. Use this when sending data to APIs or databases that expect underscored names.
+
+```typescript
+import typia from "typia";
+
+interface IUserPayload {
+  userId: string;
+  firstName: string;
+  lastName: string;
+  emailAddress: string;
+  dateOfBirth: string;
+}
+
+const payload = typia.notations.snake<IUserPayload>({
+  userId: "abc-123",
+  firstName: "Alice",
+  lastName: "Smith",
+  emailAddress: "alice@example.com",
+  dateOfBirth: "1990-05-21",
+});
+// {
+//   user_id: "abc-123",
+//   first_name: "Alice",
+//   last_name: "Smith",
+//   email_address: "alice@example.com",
+//   date_of_birth: "1990-05-21"
+// }
+```
+
+### Snake variants
+
+<Tabs>
+  <Tab title="snake (no validation)">
+
+```typescript
+import typia from "typia";
+
+const result = typia.notations.snake<T>(input);
+```
+
+Signature: `snake<T>(input: T): SnakeCase<T>`
+
+  </Tab>
+  <Tab title="assertSnake">
+
+```typescript
+import typia from "typia";
+
+const result = typia.notations.assertSnake<T>(input);
+```
+
+Signature: `assertSnake<T>(input: unknown, errorFactory?): SnakeCase<T>`
+
+  </Tab>
+  <Tab title="isSnake">
+
+```typescript
+import typia from "typia";
+
+const result = typia.notations.isSnake<T>(input);
+// SnakeCase<T> | null
+```
+
+Signature: `isSnake<T>(input: unknown): SnakeCase<T> | null`
+
+  </Tab>
+  <Tab title="validateSnake">
+
+```typescript
+import typia from "typia";
+
+const result = typia.notations.validateSnake<T>(input);
+// IValidation<SnakeCase<T>>
+```
+
+Signature: `validateSnake<T>(input: unknown): IValidation<SnakeCase<T>>`
+
+  </Tab>
+</Tabs>
+
+### Snake factory functions
+
+```typescript
+import typia from "typia";
+
+const toSnake = typia.notations.createSnake<IUserPayload>();
+const assertToSnake = typia.notations.createAssertSnake<IUserPayload>();
+const isToSnake = typia.notations.createIsSnake<IUserPayload>();
+const validateToSnake = typia.notations.createValidateSnake<IUserPayload>();
+```
+
+---
+
+## Return types: `CamelCase<T>`, `PascalCase<T>`, `SnakeCase<T>`
+
+Each converter returns a mapped type that renames every property key. These types recursively apply to nested objects, arrays of objects, `Set<T>`, and `Map<K, V>`. Methods are stripped (same behavior as `Resolved<T>`).
+
+```typescript
+import type { CamelCase, PascalCase, SnakeCase } from "typia";
+
+interface IExample {
+  some_field: string;
+  nested_obj: {
+    inner_value: number;
+  };
+}
+
+type Camel = CamelCase<IExample>;
+// { someField: string; nestedObj: { innerValue: number } }
+
+type Pascal = PascalCase<IExample>;
+// { SomeField: string; NestedObj: { InnerValue: number } }
+
+type Snake = SnakeCase<{ someField: string; nestedObj: { innerValue: number } }>;
+// { some_field: string; nested_obj: { inner_value: number } }
+```
+
+<Note>
+Native classes (`Date`, `RegExp`, `Map`, `Set`, etc.) are passed through unchanged by all three converters.
+</Note>
+
+---
+
+## Real-world example: REST API adapter
+
+A common pattern is to consume a REST API that returns `snake_case` JSON and expose it as `camelCase` to the rest of the application. Using `assertCamel` ensures the API response matches the expected schema before converting:
+
+```typescript
+import typia from "typia";
+import { tags } from "typia";
+
+// Shape returned by the REST API
+interface IApiArticle {
+  article_id: string & tags.Format<"uuid">;
+  author_name: string;
+  publish_date: string & tags.Format<"date">;
+  view_count: number & tags.Type<"uint32">;
+  is_published: boolean;
+  category_tags: string[];
+}
+
+// Application model (camelCase)
+// Automatically inferred as CamelCase<IApiArticle>
+
+async function fetchArticle(id: string) {
+  const res = await fetch(`/api/articles/${id}`);
+  const raw = await res.json();
+
+  // Validate the API response shape AND convert to camelCase in one step
+  // Throws if the API returns an unexpected shape
+  return typia.notations.assertCamel<IApiArticle>(raw);
+}
+
+// Usage — TypeScript knows the returned type is CamelCase<IApiArticle>
+const article = await fetchArticle("550e8400-e29b-41d4-a716-446655440000");
+console.log(article.articleId);    // string & Format<"uuid">
+console.log(article.authorName);   // string
+console.log(article.publishDate);  // string & Format<"date">
+console.log(article.viewCount);    // number & Type<"uint32">
+```
+
+For high-throughput scenarios, create the converter once and reuse it:
+
+```typescript
+import typia from "typia";
+
+// Created once at module level — no overhead on each call
+const parseArticle = typia.notations.createAssertCamel<IApiArticle>();
+
+export async function fetchArticles(): Promise<CamelCase<IApiArticle>[]> {
+  const res = await fetch("/api/articles");
+  const items = await res.json();
+  return (items as unknown[]).map(parseArticle);
+}
+```
+
+---
+
+## Summary
+
+| Function | Validates | Converts to | Returns |
+|---|---|---|---|
+| `camel<T>` | No | camelCase | `CamelCase<T>` |
+| `assertCamel<T>` | Yes (throws) | camelCase | `CamelCase<T>` |
+| `isCamel<T>` | Yes (null) | camelCase | `CamelCase<T> \| null` |
+| `validateCamel<T>` | Yes (errors) | camelCase | `IValidation<CamelCase<T>>` |
+| `pascal<T>` | No | PascalCase | `PascalCase<T>` |
+| `assertPascal<T>` | Yes (throws) | PascalCase | `PascalCase<T>` |
+| `isPascal<T>` | Yes (null) | PascalCase | `PascalCase<T> \| null` |
+| `validatePascal<T>` | Yes (errors) | PascalCase | `IValidation<PascalCase<T>>` |
+| `snake<T>` | No | snake_case | `SnakeCase<T>` |
+| `assertSnake<T>` | Yes (throws) | snake_case | `SnakeCase<T>` |
+| `isSnake<T>` | Yes (null) | snake_case | `SnakeCase<T> \| null` |
+| `validateSnake<T>` | Yes (errors) | snake_case | `IValidation<SnakeCase<T>>` |
+
+<Warning>
+All `typia.notations.*` functions are compile-time transforms. You must configure Typia's TypeScript transformer before using them. See [Setup](/setup) for details.
+</Warning>

@@ -1,0 +1,298 @@
+---
+title: "Structured Output with typia.llm.structuredOutput()"
+description: "Constrain an LLM to a single typed response with structuredOutput(). Bundles a parameters schema with parse, coerce, and validate in one interface."
+---
+
+`typia.llm.structuredOutput<T>()` generates everything you need to make an LLM return a single, schema-conformant object instead of free-form text. It produces an `ILlmStructuredOutput<T>` containing the JSON Schema for prompting and ready-made functions for parsing, coercing, and validating the response. This page explains when to use structured output versus function calling, how the interface is structured, and how to integrate it with real LLM providers.
+
+## Function calling vs. structured output
+
+Both approaches constrain LLM outputs, but they serve different purposes:
+
+| | Function calling | Structured output |
+|---|---|---|
+| **API surface** | `application()` / `controller()` | `structuredOutput()` |
+| **How many operations** | Many — LLM selects one from a list | One — LLM fills a fixed schema |
+| **LLM provider feature** | `tools` / `tool_choice` | `response_format` |
+| **Use case** | Agent-style workflows, multi-tool selection | Data extraction, typed generation |
+| **Schema type** | `ILlmApplication` with `ILlmFunction[]` | `ILlmStructuredOutput<T>` |
+
+Use **function calling** when the LLM needs to decide which action to take. Use **structured output** when you know exactly what shape you need and just want the LLM to fill it in.
+
+---
+
+## `typia.llm.structuredOutput<T>()`
+
+```typescript
+import typia from "typia";
+import typia, { ILlmStructuredOutput } from "typia";
+
+interface ExtractedInvoice {
+  vendor: string;
+  amount: number;
+  currency: string;
+  dueDate: string;
+}
+
+const output: ILlmStructuredOutput<ExtractedInvoice> =
+  typia.llm.structuredOutput<ExtractedInvoice>();
+```
+
+Like all Typia functions, `structuredOutput()` is a compile-time transformer — Typia reads the type at build time and emits the schema.
+
+### Config options
+
+Enable strict mode (all properties required, `additionalProperties: false`) for OpenAI's strict structured output:
+
+```typescript
+const output = typia.llm.structuredOutput<ExtractedInvoice, { strict: true }>();
+```
+
+Reject extraneous properties from LLM responses:
+
+```typescript
+const output = typia.llm.structuredOutput<ExtractedInvoice, { equals: true }>();
+```
+
+---
+
+## The `ILlmStructuredOutput<T>` interface
+
+```typescript
+interface ILlmStructuredOutput<T = unknown> {
+  parameters: ILlmSchema.IParameters;       // JSON Schema to send to the LLM
+  parse:    (input: string)   => IJsonParseResult<T>;  // lenient JSON parse + coerce
+  coerce:   (input: unknown)  => T;                    // coerce pre-parsed object
+  validate: (input: unknown)  => IValidation<T>;       // strict type check
+}
+```
+
+| Member | Description |
+|---|---|
+| `parameters` | Pass this to the LLM provider as the schema |
+| `parse` | Lenient JSON parser that handles malformed LLM output and coerces types |
+| `coerce` | Type coercion for SDKs that already parsed the JSON (Vercel AI, LangChain, etc.) |
+| `validate` | Full type validation — use after `parse` or `coerce` |
+
+---
+
+## Workflow
+
+<Steps>
+  <Step title="Define your output type">
+    Write a TypeScript interface for the data you want the LLM to produce. Add JSDoc comments to guide the model.
+
+    ```typescript
+    import { tags } from "typia";
+
+    interface MeetingNotes {
+      /** Title of the meeting */
+      title: string;
+      /** ISO 8601 date string */
+      date: string & tags.Format<"date">;
+      /** Names of all participants */
+      participants: string[];
+      /** Main topics discussed */
+      topics: string[];
+      /** Action items with owner and deadline */
+      actionItems: Array<{
+        task: string;
+        owner: string;
+        deadline: string & tags.Format<"date">;
+      }>;
+    }
+    ```
+  </Step>
+
+  <Step title="Generate the structured output interface">
+    ```typescript
+    import typia from "typia";
+
+    const meetingOutput = typia.llm.structuredOutput<MeetingNotes>();
+    ```
+  </Step>
+
+  <Step title="Send the schema to your LLM provider">
+    <Tabs>
+      <Tab title="OpenAI">
+        ```typescript
+        import OpenAI from "openai";
+
+        const openai = new OpenAI();
+
+        const response = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content: "Extract structured meeting notes from the transcript.",
+            },
+            { role: "user", content: transcriptText },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "meeting_notes",
+              strict: true,
+              schema: meetingOutput.parameters,
+            },
+          },
+        });
+
+        const rawJson = response.choices[0].message.content ?? "{}";
+        ```
+      </Tab>
+      <Tab title="Anthropic Claude">
+        ```typescript
+        import Anthropic from "@anthropic-ai/sdk";
+
+        const anthropic = new Anthropic();
+
+        const response = await anthropic.messages.create({
+          model: "claude-3-5-sonnet-20241022",
+          max_tokens: 2048,
+          system:
+            "Extract structured meeting notes. Respond ONLY with a JSON object " +
+            "matching this schema:\n" +
+            JSON.stringify(meetingOutput.parameters, null, 2),
+          messages: [{ role: "user", content: transcriptText }],
+        });
+
+        const rawJson =
+          response.content[0].type === "text" ? response.content[0].text : "{}";
+        ```
+      </Tab>
+      <Tab title="Google Gemini">
+        ```typescript
+        import { GoogleGenerativeAI } from "@google/generative-ai";
+
+        const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+        const model = genai.getGenerativeModel({
+          model: "gemini-1.5-pro",
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: meetingOutput.parameters as any,
+          },
+        });
+
+        const result = await model.generateContent(transcriptText);
+        const rawJson = result.response.text();
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Parse, coerce, and validate the response">
+    ```typescript
+    import { LlmJson } from "@typia/utils";
+
+    async function extractMeetingNotes(transcript: string): Promise<MeetingNotes> {
+      // ... (call LLM as above, store result in rawJson) ...
+
+      // Parse: handles malformed JSON + applies schema-based type coercion
+      const parsed = meetingOutput.parse(rawJson);
+      if (!parsed.success) {
+        throw new Error(`Unparseable JSON: ${JSON.stringify(parsed.errors)}`);
+      }
+
+      // Validate: full type check
+      const validation = meetingOutput.validate(parsed.data);
+      if (!validation.success) {
+        // LlmJson.stringify formats errors as annotated JSON for LLM feedback
+        const feedback = LlmJson.stringify(validation);
+        throw new Error(`LLM returned invalid structure:\n${feedback}`);
+      }
+
+      return validation.data;  // MeetingNotes — fully type-safe
+    }
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Using `coerce` with SDKs that pre-parse JSON
+
+SDKs like Vercel AI and LangChain parse the LLM response internally and hand you a plain JavaScript object. Use `coerce` instead of `parse` in that case:
+
+```typescript
+import { generateObject } from "ai";
+import { openai } from "@ai-sdk/openai";
+
+const { object } = await generateObject({
+  model: openai("gpt-4o"),
+  schema: meetingOutput.parameters,
+  prompt: `Extract meeting notes from: ${transcriptText}`,
+});
+
+// object is already parsed — coerce fixes any type mismatches
+const coerced = meetingOutput.coerce(object);
+
+// Then validate
+const validation = meetingOutput.validate(coerced);
+```
+
+---
+
+## Auto-correction loop
+
+When the LLM produces a structurally invalid response, you can send annotated error feedback and retry:
+
+```typescript
+import { LlmJson } from "@typia/utils";
+
+async function extractWithRetry(
+  transcript: string,
+  maxRetries = 3,
+): Promise<MeetingNotes> {
+  let lastError: string | undefined;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const messages: OpenAI.ChatCompletionMessageParam[] = [
+      { role: "system", content: "Extract meeting notes as JSON." },
+      { role: "user", content: transcript },
+    ];
+
+    if (lastError) {
+      messages.push({
+        role: "user",
+        content: `Your previous response had validation errors. Please fix:\n${lastError}`,
+      });
+    }
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages,
+      response_format: { type: "json_object" },
+    });
+
+    const rawJson = response.choices[0].message.content ?? "{}";
+    const parsed = meetingOutput.parse(rawJson);
+
+    if (parsed.success) {
+      const validation = meetingOutput.validate(parsed.data);
+      if (validation.success) return validation.data;
+      lastError = LlmJson.stringify(validation);
+    }
+  }
+
+  throw new Error("Exceeded max retries");
+}
+```
+
+<Warning>
+  Keep retry counts low (2–3). Infinite loops against a paid API are expensive. Log failures so you can improve your prompts instead.
+</Warning>
+
+---
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="LLM JSON utilities" icon="wrench" href="/llm/json">
+    Learn more about `parse()`, `coerce()`, and `LlmJson.stringify()`.
+  </Card>
+  <Card title="Application & controller" icon="code" href="/llm/application">
+    Use function calling when you need the LLM to select from multiple operations.
+  </Card>
+</CardGroup>

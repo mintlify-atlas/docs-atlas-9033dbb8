@@ -1,0 +1,152 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Typia",
+  "projectDescription": "A TypeScript transformer library providing super-fast runtime validators, JSON serialization, LLM function calling harness, Protocol Buffer support, and random data generation from pure TypeScript types.",
+  "theme": "luma",
+  "primaryColor": "#aeccdc",
+  "lightColor": "#5a798c",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "setup",
+              "concepts"
+            ]
+          },
+          {
+            "group": "Runtime Validators",
+            "pages": [
+              "validators/overview",
+              "validators/assert",
+              "validators/is",
+              "validators/validate",
+              "validators/tags"
+            ]
+          },
+          {
+            "group": "JSON",
+            "pages": [
+              "json/schema",
+              "json/stringify",
+              "json/parse"
+            ]
+          },
+          {
+            "group": "LLM & AI",
+            "pages": [
+              "llm/overview",
+              "llm/application",
+              "llm/structured-output",
+              "llm/json"
+            ]
+          },
+          {
+            "group": "Protocol Buffer",
+            "pages": [
+              "protobuf/overview",
+              "protobuf/encode-decode"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "utilities/random",
+              "utilities/misc",
+              "utilities/notations"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Integrations",
+        "groups": [
+          {
+            "group": "Build Tools",
+            "pages": [
+              "integrations/unplugin",
+              "integrations/setup-wizard"
+            ]
+          },
+          {
+            "group": "Frameworks",
+            "pages": [
+              "integrations/nestjs",
+              "integrations/trpc",
+              "integrations/vercel-ai",
+              "integrations/langchain",
+              "integrations/mcp"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Super-fast runtime validators (20,000x faster than class-validator) via TypeScript transformation",
+    "Type-safe JSON serialization 200x faster than class-transformer",
+    "LLM function calling harness that improves accuracy from 6.75% to 100%",
+    "Protocol Buffer encoding/decoding from pure TypeScript types",
+    "Random data generation conforming to TypeScript type constraints",
+    "Validation type tags (minimum, maximum, pattern, format, etc.) as TypeScript branded types",
+    "Zero-schema approach — only pure TypeScript types required",
+    "Support for unplugin ecosystem (Vite, Webpack, Rollup, esbuild, Next.js, Bun)"
+  ],
+  "publicApiSurface": [
+    "typia.is<T>(input)",
+    "typia.assert<T>(input)",
+    "typia.assertGuard<T>(input)",
+    "typia.validate<T>(input)",
+    "typia.assertEquals<T>(input)",
+    "typia.equals<T>(input)",
+    "typia.validateEquals<T>(input)",
+    "typia.random<T>(generator?)",
+    "typia.json.schema<T>()",
+    "typia.json.assertParse<T>(input)",
+    "typia.json.assertStringify<T>(input)",
+    "typia.json.isParse<T>(input)",
+    "typia.json.isStringify<T>(input)",
+    "typia.json.validateParse<T>(input)",
+    "typia.json.validateStringify<T>(input)",
+    "typia.llm.application<Class, Model>()",
+    "typia.llm.controller<Class, Model>(name, execute)",
+    "typia.llm.structuredOutput<P, Model>()",
+    "typia.llm.parameters<P, Model>()",
+    "typia.llm.schema<T, Model>()",
+    "typia.llm.parse<T>(str)",
+    "typia.protobuf.message<T>()",
+    "typia.protobuf.encode<T>(input)",
+    "typia.protobuf.decode<T>(buffer)",
+    "typia.protobuf.assertEncode<T>(input)",
+    "typia.protobuf.assertDecode<T>(buffer)",
+    "typia.misc.clone<T>(input)",
+    "typia.misc.prune<T>(input)",
+    "typia.misc.literals<T>()",
+    "typia.notations.camel<T>(input)",
+    "typia.notations.pascal<T>(input)",
+    "typia.notations.snake<T>(input)",
+    "typia.createIs<T>()",
+    "typia.createAssert<T>()",
+    "typia.createValidate<T>()",
+    "typia.createRandom<T>()",
+    "tags.MinLength<N>",
+    "tags.MaxLength<N>",
+    "tags.Pattern<S>",
+    "tags.Format<F>",
+    "tags.Minimum<N>",
+    "tags.Maximum<N>",
+    "tags.ExclusiveMinimum<N>",
+    "tags.ExclusiveMaximum<N>",
+    "tags.MultipleOf<N>",
+    "tags.MinItems<N>",
+    "tags.MaxItems<N>",
+    "tags.UniqueItems",
+    "tags.Type<T>",
+    "tags.Default<T>"
+  ]
+}

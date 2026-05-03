@@ -1,0 +1,306 @@
+---
+title: "Installing and Configuring Typia in Your TypeScript Project"
+description: "Step-by-step guide to installing Typia, configuring the TypeScript transformer via ts-patch or unplugin, and verifying your setup with a working example."
+keywords: ["typia", "setup", "install", "ts-patch", "transformer", "tsconfig", "unplugin", "vite", "webpack"]
+---
+
+Typia requires a TypeScript transformer to rewrite `typia.*<T>()` calls into optimized runtime code at compile time. This page walks you through two setup paths — the `ts-patch` transformer for Node.js / tsc-based projects and `@typia/unplugin` for bundler-based projects — and shows how to verify that everything works.
+
+<Note>
+Typia requires TypeScript 4.8 or later. The `strict` or `strictNullChecks` compiler option must be enabled.
+</Note>
+
+## Path 1: ts-patch transformer
+
+Use this path when you compile with `tsc` directly, or when using Node.js runtimes that invoke `tsc` (NestJS, ts-node, etc.).
+
+<Steps>
+  <Step title="Install Typia">
+    Add `typia` and the TypeScript compiler to your project.
+
+    <CodeGroup>
+      ```bash npm
+      npm install typia
+      npm install -D typescript ts-patch
+      ```
+      ```bash pnpm
+      pnpm add typia
+      pnpm add -D typescript ts-patch
+      ```
+      ```bash yarn
+      yarn add typia
+      yarn add -D typescript ts-patch
+      ```
+      ```bash bun
+      bun add typia
+      bun add -D typescript ts-patch
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Run the setup wizard">
+    Typia ships with an interactive setup wizard that installs `ts-patch`, initializes `tsconfig.json` if needed, and configures the transformer plugin automatically.
+
+    <CodeGroup>
+      ```bash npm
+      npx typia setup
+      ```
+      ```bash pnpm
+      pnpm typia setup --manager pnpm
+      ```
+      ```bash yarn
+      yarn typia setup --manager yarn
+      ```
+      ```bash bun
+      bun typia setup
+      ```
+    </CodeGroup>
+
+    The wizard detects your package manager, installs the necessary dependencies, and updates `tsconfig.json`. You can also pass flags to skip the interactive prompts:
+
+    ```bash
+    npx typia setup --manager npm --project tsconfig.json
+    ```
+
+    <Tip>
+      For a fully automated setup in CI or monorepos, pass both `--manager` and `--project` flags to avoid interactive prompts.
+    </Tip>
+  </Step>
+
+  <Step title="Verify tsconfig.json">
+    After the wizard runs, your `tsconfig.json` should contain the transformer plugin entry and strict null checks:
+
+    ```json
+    {
+      "compilerOptions": {
+        "strict": true,
+        "skipLibCheck": true,
+        "plugins": [
+          { "transform": "typia/lib/transform" }
+        ]
+      }
+    }
+    ```
+
+    <Warning>
+      The `strict` (or `strictNullChecks`) option is **required**. Typia's transformer emits a compile error if it is disabled. The `skipLibCheck: true` setting is added by the wizard to avoid type conflicts with the patched compiler.
+    </Warning>
+  </Step>
+
+  <Step title="Add the prepare script">
+    `ts-patch` patches the TypeScript compiler so that the plugin entry in `tsconfig.json` is actually invoked. The wizard adds a `prepare` script to `package.json` to re-apply the patch after each `npm install`:
+
+    ```json
+    {
+      "scripts": {
+        "prepare": "ts-patch install"
+      }
+    }
+    ```
+
+    Run `npm run prepare` (or equivalent) once after the wizard to activate the patch immediately.
+  </Step>
+</Steps>
+
+## Path 2: unplugin (Vite, Webpack, and others)
+
+Use `@typia/unplugin` when you build with a bundler such as Vite, Webpack, Rollup, esbuild, Next.js, or Rspack. The plugin performs the same compile-time transformation as `ts-patch` but inside your bundler's pipeline.
+
+<Steps>
+  <Step title="Install Typia and run the setup wizard">
+    Install `typia` and run the setup wizard first. The wizard configures `tsconfig.json` with `strict` and the transformer entry, which `@typia/unplugin` also reads.
+
+    <CodeGroup>
+      ```bash npm
+      npm install typia
+      npx typia setup
+      ```
+      ```bash pnpm
+      pnpm add typia
+      pnpm typia setup --manager pnpm
+      ```
+      ```bash yarn
+      yarn add typia
+      yarn typia setup --manager yarn
+      ```
+      ```bash bun
+      bun add typia
+      bun typia setup
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Install @typia/unplugin">
+    <CodeGroup>
+      ```bash npm
+      npm install -D @typia/unplugin
+      ```
+      ```bash pnpm
+      pnpm add -D @typia/unplugin
+      ```
+      ```bash yarn
+      yarn add -D @typia/unplugin
+      ```
+      ```bash bun
+      bun add -D @typia/unplugin
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Add the plugin to your bundler config">
+    <Tabs>
+      <Tab title="Vite">
+        ```typescript
+        // vite.config.ts
+        import UnpluginTypia from "@typia/unplugin/vite";
+        import { defineConfig } from "vite";
+
+        export default defineConfig({
+          plugins: [
+            UnpluginTypia(), // place before other plugins like react, svelte, etc.
+          ],
+        });
+        ```
+
+        <Note>
+          When using `compilerOptions.paths` or `compilerOptions.baseUrl` in your `tsconfig.json`, add the same aliases under `resolve.alias` in `vite.config.ts`. Vite resolves modules independently of `tsc`.
+        </Note>
+      </Tab>
+      <Tab title="Webpack">
+        ```javascript
+        // webpack.config.js
+        const { default: UnpluginTypia } = require("@typia/unplugin/webpack");
+
+        module.exports = {
+          plugins: [
+            UnpluginTypia(),
+          ],
+        };
+        ```
+      </Tab>
+      <Tab title="Next.js">
+        ```javascript
+        // next.config.mjs
+        import unTypiaNext from "@typia/unplugin/next";
+
+        const nextConfig = { /* your Next.js config */ };
+
+        export default unTypiaNext(nextConfig);
+        ```
+      </Tab>
+      <Tab title="Rollup">
+        ```typescript
+        // rollup.config.js
+        import UnpluginTypia from "@typia/unplugin/rollup";
+
+        export default {
+          plugins: [
+            UnpluginTypia(),
+          ],
+        };
+        ```
+      </Tab>
+      <Tab title="esbuild">
+        ```typescript
+        // esbuild.config.js
+        import UnpluginTypia from "@typia/unplugin/esbuild";
+
+        export default {
+          plugins: [
+            UnpluginTypia(),
+          ],
+        };
+        ```
+      </Tab>
+    </Tabs>
+
+    `@typia/unplugin` supports Bun, esbuild, Farm, Next.js, Rolldown, Rollup, Rspack, Vite, and Webpack. See [Integrations: unplugin](/integrations/unplugin) for the full list.
+  </Step>
+</Steps>
+
+## Manual tsconfig.json configuration
+
+If you prefer to configure `tsconfig.json` manually without the wizard, add the following compiler options:
+
+```json
+{
+  "compilerOptions": {
+    "strict": true,
+    "skipLibCheck": true,
+    "plugins": [
+      { "transform": "typia/lib/transform" }
+    ]
+  }
+}
+```
+
+Then install `ts-patch` and add the prepare script manually:
+
+```bash
+npm install -D ts-patch
+```
+
+```json
+{
+  "scripts": {
+    "prepare": "ts-patch install"
+  }
+}
+```
+
+## Verification
+
+Once setup is complete, create a small test file to confirm the transformer is working:
+
+```typescript
+// src/verify.ts
+import typia, { tags } from "typia";
+
+interface IMember {
+  id: string & tags.Format<"uuid">;
+  email: string & tags.Format<"email">;
+  age: number & tags.Minimum<18> & tags.Maximum<100>;
+}
+
+// createIs returns a reusable validator function
+const isMember = typia.createIs<IMember>();
+
+console.log(isMember({ id: "not-a-uuid", email: "test@example.com", age: 30 }));
+// → false  (id is not a valid UUID)
+
+console.log(isMember({
+  id: "550e8400-e29b-41d4-a716-446655440000",
+  email: "test@example.com",
+  age: 30,
+}));
+// → true
+```
+
+Compile and run:
+
+```bash
+npx tsc && node dist/verify.js
+```
+
+If the output is `false` then `true`, the transformer is active and working correctly.
+
+<Warning>
+  If you see a runtime error saying `"assert" is not configured`, the transformer plugin is not active. Double-check that `ts-patch install` has been run and that `tsconfig.json` contains the `plugins` entry with `"transform": "typia/lib/transform"`.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Core concepts" icon="lightbulb" href="/concepts">
+    Understand how transformation, type tags, and validators work.
+  </Card>
+  <Card title="Runtime validators" icon="shield-check" href="/validators/overview">
+    Explore `is`, `assert`, and `validate` in depth.
+  </Card>
+  <Card title="unplugin reference" icon="plug" href="/integrations/unplugin">
+    Full configuration options for the bundler plugin.
+  </Card>
+  <Card title="Setup wizard reference" icon="wand-magic-sparkles" href="/integrations/setup-wizard">
+    CLI flags and wizard internals.
+  </Card>
+</CardGroup>

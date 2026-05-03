@@ -1,0 +1,207 @@
+---
+title: "Typia with tRPC — Compile-Time Procedure Validation"
+description: "Validate tRPC procedure inputs with Typia instead of Zod. Use typia.assert for fast compile-time-generated validators in your tRPC routers."
+---
+
+tRPC uses Zod by default for input validation in procedures, but Zod schemas must be written manually and maintained alongside your TypeScript types. Typia generates validators directly from your TypeScript types at compile time, eliminating the schema duplication and providing significantly faster runtime validation.
+
+This page shows how to wire Typia validators into tRPC procedures using a custom parser, and how to build a complete router with type-safe input validation.
+
+## Installation
+
+<Steps>
+  <Step title="Install tRPC and Typia">
+    ```bash
+    npm install @trpc/server typia
+    npx typia setup
+    ```
+
+    For a full-stack setup with a React client, also install `@trpc/client` and `@trpc/react-query`.
+  </Step>
+
+  <Step title="Verify tsconfig.json">
+    Confirm that `tsconfig.json` includes the Typia transformer (added by `npx typia setup`):
+
+    ```json
+    {
+      "compilerOptions": {
+        "strict": true,
+        "skipLibCheck": true,
+        "plugins": [
+          { "transform": "typia/lib/transform" }
+        ]
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Creating a Typia parser for tRPC
+
+tRPC's `.input()` method accepts any object that implements a `parse` method — the same interface Zod schemas expose. You can wrap `typia.assert<T>()` to satisfy this interface:
+
+```typescript
+// src/trpc/typia-input.ts
+import typia, { TypeGuardError } from "typia";
+
+/**
+ * Wrap a typia assert function in a tRPC-compatible parser.
+ *
+ * Usage: .input(typiaInput(typia.createAssert<MyInput>()))
+ */
+export function typiaInput<T>(assert: (input: unknown) => T) {
+  return {
+    parse: (input: unknown): T => {
+      try {
+        return assert(input);
+      } catch (error) {
+        if (error instanceof TypeGuardError) {
+          throw new Error(
+            `Validation error at ${error.path}: expected ${error.expected}, got ${JSON.stringify(error.value)}`
+          );
+        }
+        throw error;
+      }
+    },
+  };
+}
+```
+
+## Defining input types
+
+Define your procedure input types as plain TypeScript interfaces. Typia reads the type at compile time and generates a validator — no manual schema is needed:
+
+```typescript
+// src/types/inputs.ts
+import { tags } from "typia";
+
+export interface CreateUserInput {
+  name: string;
+  email: string & tags.Format<"email">;
+  age: number & tags.Minimum<0> & tags.Maximum<150>;
+}
+
+export interface GetUserInput {
+  id: string & tags.Format<"uuid">;
+}
+
+export interface ListUsersInput {
+  page: number & tags.Type<"uint32"> & tags.Minimum<1>;
+  limit: number & tags.Type<"uint32"> & tags.Minimum<1> & tags.Maximum<100>;
+}
+```
+
+## Building a tRPC router with Typia validation
+
+```typescript
+// src/router.ts
+import { initTRPC, TRPCError } from "@trpc/server";
+import typia from "typia";
+
+import { typiaInput } from "./trpc/typia-input";
+import { CreateUserInput, GetUserInput, ListUsersInput } from "./types/inputs";
+
+const t = initTRPC.create();
+
+export const appRouter = t.router({
+  // Query with validated input
+  getUser: t.procedure
+    .input(typiaInput(typia.createAssert<GetUserInput>()))
+    .query(({ input }) => {
+      // input.id is a validated UUID string
+      return { id: input.id, name: "Alice", email: "alice@example.com" };
+    }),
+
+  // Query with pagination
+  listUsers: t.procedure
+    .input(typiaInput(typia.createAssert<ListUsersInput>()))
+    .query(({ input }) => {
+      const { page, limit } = input;
+      return {
+        users: [],
+        total: 0,
+        page,
+        limit,
+      };
+    }),
+
+  // Mutation with validated body
+  createUser: t.procedure
+    .input(typiaInput(typia.createAssert<CreateUserInput>()))
+    .mutation(({ input }) => {
+      // input.email is a validated email address
+      // input.age is between 0 and 150
+      return {
+        id: crypto.randomUUID(),
+        ...input,
+        createdAt: new Date().toISOString(),
+      };
+    }),
+});
+
+export type AppRouter = typeof appRouter;
+```
+
+## Using the router
+
+```typescript
+// src/server.ts
+import { createHTTPServer } from "@trpc/server/adapters/standalone";
+import { appRouter } from "./router";
+
+const server = createHTTPServer({
+  router: appRouter,
+  createContext: () => ({}),
+});
+
+server.listen(3000);
+console.log("tRPC server running on port 3000");
+```
+
+## Error handling
+
+When Typia's `assert` function detects an invalid input, it throws a `TypeGuardError`. The `typiaInput` wrapper converts this into a plain `Error` that tRPC surfaces to clients as a `BAD_REQUEST` error.
+
+To customize the error format, modify the `parse` function in `typiaInput`:
+
+```typescript
+import { TRPCError } from "@trpc/server";
+import typia, { TypeGuardError } from "typia";
+
+export function typiaInput<T>(assert: (input: unknown) => T) {
+  return {
+    parse: (input: unknown): T => {
+      try {
+        return assert(input);
+      } catch (error) {
+        if (error instanceof TypeGuardError) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Invalid input at ${error.path}: expected ${error.expected}`,
+          });
+        }
+        throw error;
+      }
+    },
+  };
+}
+```
+
+<Tip>
+`typia.createAssert<T>()` compiles the validator once at startup. Prefer it over `typia.assert<T>(value)` inline for procedures that receive many requests, as the inline form generates a new closure on every call.
+</Tip>
+
+<CardGroup cols={2}>
+  <Card title="typia.assert" href="/validators/assert">
+    Details on the assert function and TypeGuardError
+  </Card>
+  <Card title="Validation Tags" href="/validators/tags">
+    Format, Minimum, Maximum, Type, and other tag constraints
+  </Card>
+  <Card title="Setup Wizard" href="/integrations/setup-wizard">
+    Configure the Typia transformer for your project
+  </Card>
+  <Card title="NestJS Integration" href="/integrations/nestjs">
+    Use Typia for request validation in NestJS
+  </Card>
+</CardGroup>

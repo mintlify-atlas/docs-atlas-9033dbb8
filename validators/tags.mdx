@@ -1,0 +1,394 @@
+---
+title: "Type Tags: Attach Validation Constraints to TypeScript Types"
+description: "Add constraints like MinLength, Format, and Minimum to TypeScript types via intersection — no decorators or schema files, tags live in the type itself."
+---
+
+Type tags are TypeScript intersection types that attach validation constraints directly to primitive types. Instead of a separate schema definition or decorator, you write `string & MinLength<3>` and typia reads it at compile time to generate the corresponding runtime check. The tags have no runtime representation — they are phantom types that only exist in the type system.
+
+```typescript
+import { tags } from "typia";
+
+interface User {
+  id: number & tags.Type<"uint32">;
+  email: string & tags.Format<"email">;
+  username: string & tags.MinLength<3> & tags.MaxLength<20>;
+  age: number & tags.Minimum<0> & tags.Maximum<120>;
+  roles: string[] & tags.MinItems<1> & tags.UniqueItems;
+}
+```
+
+Every typia validator — `is`, `assert`, `validate` — enforces tag constraints at runtime alongside structural type checks.
+
+## How tags work
+
+Each tag is a type alias for `TagBase<Props>`, which adds a phantom property `"typia.tag"?: Props` to the type. The typia compiler transformer reads these properties during compilation and emits validation code that checks both the structural shape and all tag constraints. At runtime the phantom property is never present on actual values.
+
+Combining multiple tags uses the TypeScript `&` intersection operator. All constraints must be satisfied for validation to pass.
+
+```typescript
+// A string that is a valid email AND at most 255 characters
+type EmailField = string & tags.Format<"email"> & tags.MaxLength<255>;
+
+// A number that is a positive integer
+type PositiveInt = number & tags.Type<"int32"> & tags.ExclusiveMinimum<0>;
+
+// An array with 1-10 unique strings
+type TagList = string[] & tags.MinItems<1> & tags.MaxItems<10> & tags.UniqueItems;
+```
+
+## String tags
+
+### MinLength\<N\>
+
+Validates that a string has at least `N` characters (`N <= input.length`).
+
+```typescript
+interface Account {
+  // Password must be at least 8 characters
+  password: string & tags.MinLength<8>;
+  // Username: 3-20 characters
+  username: string & tags.MinLength<3> & tags.MaxLength<20>;
+}
+```
+
+### MaxLength\<N\>
+
+Validates that a string has at most `N` characters (`input.length <= N`).
+
+```typescript
+interface Article {
+  title: string & tags.MaxLength<100>;
+  body: string & tags.MinLength<10> & tags.MaxLength<10000>;
+}
+```
+
+### Pattern\<Regex\>
+
+Validates that a string matches the given regular expression. The pattern is a string literal representing the regex body (without surrounding `/`). Mutually exclusive with `Format`.
+
+```typescript
+interface Product {
+  // SKU: 3 uppercase letters, dash, 4 digits
+  sku: string & tags.Pattern<"^[A-Z]{3}-[0-9]{4}$">;
+  // US phone number
+  phone: string & tags.Pattern<"^\\+1[0-9]{10}$">;
+}
+```
+
+<Warning>
+  `Pattern` and `Format` are mutually exclusive on the same property. Using both causes a compile-time error from the typia transformer.
+</Warning>
+
+### Format\<Value\>
+
+Validates that a string conforms to a well-known format. Mutually exclusive with `Pattern`.
+
+```typescript
+interface Contact {
+  email: string & tags.Format<"email">;
+  website: string & tags.Format<"url">;
+  userId: string & tags.Format<"uuid">;
+  birthDate: string & tags.Format<"date">;
+}
+```
+
+All supported format values:
+
+| Value | Description |
+|---|---|
+| `"email"` | RFC 5321 email address |
+| `"idn-email"` | Internationalized email (RFC 6531) |
+| `"hostname"` | Internet hostname |
+| `"idn-hostname"` | Internationalized hostname |
+| `"uri"` | URI (RFC 3986) |
+| `"uri-reference"` | URI or relative reference |
+| `"uri-template"` | URI template (RFC 6570) |
+| `"url"` | URL |
+| `"iri"` | Internationalized URI |
+| `"iri-reference"` | Internationalized URI reference |
+| `"uuid"` | UUID (RFC 4122) |
+| `"ipv4"` | IPv4 address |
+| `"ipv6"` | IPv6 address |
+| `"date-time"` | ISO 8601 date-time string |
+| `"date"` | ISO 8601 date (`YYYY-MM-DD`) |
+| `"time"` | ISO 8601 time |
+| `"duration"` | ISO 8601 duration |
+| `"json-pointer"` | JSON Pointer (RFC 6901) |
+| `"relative-json-pointer"` | Relative JSON Pointer |
+| `"regex"` | Regular expression |
+| `"byte"` | Base64-encoded data |
+| `"password"` | Password field (schema documentation only) |
+
+### ContentMediaType\<MimeType\>
+
+Metadata-only tag (no runtime validation). Documents the MIME type of a string-encoded binary or structured value in JSON Schema output.
+
+```typescript
+interface Media {
+  thumbnail: string & tags.ContentMediaType<"image/png">;
+  payload: string & tags.ContentMediaType<"application/json">;
+}
+```
+
+## Number tags
+
+Number tags apply to both `number` and `bigint` properties.
+
+### Minimum\<N\>
+
+Inclusive lower bound: validates `N <= input`. Mutually exclusive with `ExclusiveMinimum`.
+
+```typescript
+interface Price {
+  amount: number & tags.Minimum<0>; // must be >= 0
+}
+```
+
+### Maximum\<N\>
+
+Inclusive upper bound: validates `input <= N`. Mutually exclusive with `ExclusiveMaximum`.
+
+```typescript
+interface Rating {
+  score: number & tags.Minimum<0> & tags.Maximum<5>;
+}
+```
+
+### ExclusiveMinimum\<N\>
+
+Exclusive lower bound: validates `N < input` (strictly greater than). Mutually exclusive with `Minimum`.
+
+```typescript
+interface PositiveValue {
+  amount: number & tags.ExclusiveMinimum<0>; // must be > 0, not 0
+}
+```
+
+### ExclusiveMaximum\<N\>
+
+Exclusive upper bound: validates `input < N` (strictly less than). Mutually exclusive with `Maximum`.
+
+```typescript
+interface Probability {
+  value: number & tags.Minimum<0> & tags.ExclusiveMaximum<1>; // [0, 1)
+}
+```
+
+### MultipleOf\<N\>
+
+Divisibility constraint: validates `input % N === 0`.
+
+```typescript
+interface Payment {
+  // Cents precision: 0.01, 0.02, ..., 1.00, ...
+  amount: number & tags.Minimum<0> & tags.MultipleOf<0.01>;
+  // Page sizes must be multiples of 10
+  pageSize: number & tags.MultipleOf<10> & tags.Minimum<10> & tags.Maximum<100>;
+}
+```
+
+## Array tags
+
+Array tags apply to array types using intersection syntax on the array type itself (not on the element type).
+
+### MinItems\<N\>
+
+Validates that an array has at least `N` elements.
+
+```typescript
+interface Order {
+  // At least one item required
+  lineItems: LineItem[] & tags.MinItems<1>;
+}
+```
+
+### MaxItems\<N\>
+
+Validates that an array has at most `N` elements.
+
+```typescript
+interface Upload {
+  files: FileRef[] & tags.MaxItems<10>;
+}
+```
+
+### UniqueItems
+
+Validates that all array elements are unique. Primitives are compared with `===`; objects use deep structural comparison.
+
+```typescript
+interface Config {
+  // No duplicate environment names
+  environments: string[] & tags.UniqueItems;
+  // Unique server IDs, 1-5
+  serverIds: number[] & tags.MinItems<1> & tags.MaxItems<5> & tags.UniqueItems;
+}
+```
+
+## Special tags
+
+### Type\<Value\>
+
+Constrains a number or bigint to a specific bit-width. Essential for Protocol Buffer serialization and for working with integer APIs.
+
+```typescript
+import { tags } from "typia";
+
+interface ProtoMessage {
+  id: number & tags.Type<"uint32">;
+  timestamp: bigint & tags.Type<"int64">;
+  score: number & tags.Type<"float">;
+}
+```
+
+Available values: `"int32"`, `"uint32"`, `"int64"`, `"uint64"`, `"float"`, `"double"`.
+
+### Default\<Value\>
+
+Metadata-only tag. Sets the `default` field in generated JSON Schema. Does not apply default values at runtime.
+
+```typescript
+interface PaginationParams {
+  page: (number & tags.Minimum<1> & tags.Default<1>) | undefined;
+  limit: (number & tags.Minimum<1> & tags.Maximum<100> & tags.Default<20>) | undefined;
+}
+```
+
+### Constant\<Value, Content\>
+
+Attaches a `title` and/or `description` to individual literal values in a union. Useful for documenting enum-like types in JSON Schema.
+
+```typescript
+type Status =
+  | tags.Constant<"pending", { title: "Pending"; description: "Awaiting processing" }>
+  | tags.Constant<"active", { title: "Active"; description: "Currently running" }>
+  | tags.Constant<"closed", { title: "Closed"; description: "Completed or cancelled" }>;
+
+interface Task {
+  status: Status;
+}
+```
+
+### Example\<Value\>
+
+Adds a single `example` value to the generated JSON Schema. Metadata-only.
+
+```typescript
+interface UserProfile {
+  email: string & tags.Format<"email"> & tags.Example<"alice@example.com">;
+  age: number & tags.Minimum<0> & tags.Example<25>;
+}
+```
+
+### Examples\<Record\>
+
+Adds multiple named examples to the generated JSON Schema. Metadata-only.
+
+```typescript
+interface Product {
+  price: number & tags.Examples<{
+    budget: 9.99;
+    standard: 49.99;
+    premium: 199.99;
+  }>;
+}
+```
+
+### Sequence\<N\>
+
+Assigns a Protocol Buffer field number. Used by `typia.protobuf.encode()` and `typia.protobuf.decode()`. See the [protobuf overview](/protobuf/overview) for full details.
+
+```typescript
+interface Message {
+  id: number & tags.Sequence<1> & tags.Type<"uint32">;
+  name: string & tags.Sequence<2>;
+  payload: string & tags.Sequence<3>;
+}
+```
+
+## Combining multiple tags
+
+Any number of compatible tags can be combined on the same property using `&`. All constraints must pass for validation to succeed.
+
+```typescript
+import { tags } from "typia";
+
+interface StrictUser {
+  // UUID, exactly 36 characters, with an example
+  id: string &
+    tags.Format<"uuid"> &
+    tags.Example<"550e8400-e29b-41d4-a716-446655440000">;
+
+  // Email, max 255 characters
+  email: string &
+    tags.Format<"email"> &
+    tags.MaxLength<255>;
+
+  // Username: 3-30 characters, alphanumeric + underscores
+  username: string &
+    tags.MinLength<3> &
+    tags.MaxLength<30> &
+    tags.Pattern<"^[a-zA-Z0-9_]+$">;
+
+  // Age: integer, 13-120
+  age: number &
+    tags.Type<"int32"> &
+    tags.Minimum<13> &
+    tags.Maximum<120>;
+
+  // Score: 0.0-10.0 in 0.5 increments
+  score: number &
+    tags.Minimum<0> &
+    tags.Maximum<10> &
+    tags.MultipleOf<0.5>;
+
+  // Tags: 1-5 unique strings
+  interests: string[] &
+    tags.MinItems<1> &
+    tags.MaxItems<5> &
+    tags.UniqueItems;
+}
+```
+
+## Custom tags with TagBase
+
+You can create your own tags using `TagBase<Props>` directly. Custom tags allow you to embed arbitrary validation expressions and JSON Schema properties.
+
+```typescript
+import { tags } from "typia";
+
+// A tag that validates a string is a valid hex color code
+type HexColor = tags.TagBase<{
+  target: "string";
+  kind: "hexColor";
+  value: undefined;
+  validate: `RegExp("^#[0-9A-Fa-f]{6}$").test($input)`;
+  exclusive: ["format", "pattern"];
+  schema: {
+    pattern: "^#[0-9A-Fa-f]{6}$";
+    "x-format": "hex-color";
+  };
+}>;
+
+interface Theme {
+  primaryColor: string & HexColor;
+  backgroundColor: string & HexColor;
+}
+```
+
+The `validate` field uses `$input` as a placeholder for the actual value. The expression is inlined into the generated validator function verbatim — so it must be a valid JavaScript expression.
+
+<Note>
+  When writing custom `validate` expressions, `$importInternal("functionName")` can be used to reference internal typia helper functions. For most custom tags a simple expression like `RegExp("...").test($input)` is sufficient.
+</Note>
+
+### `tags.TagBase` props reference
+
+| Property | Type | Description |
+|---|---|---|
+| `target` | `"boolean" \| "bigint" \| "number" \| "string" \| "array" \| "object"` | Which primitive type this tag applies to |
+| `kind` | `string` | Unique identifier for this tag type |
+| `value` | `boolean \| bigint \| number \| string \| undefined` | The constraint value (e.g. `3` for `MinLength<3>`) |
+| `validate` | `string \| object` | JavaScript expression to validate `$input`, or a map from target types to expressions |
+| `exclusive` | `boolean \| string[]` | `true` = no duplicate tags of same kind; `string[]` = list of incompatible tag kinds |
+| `schema` | `object \| undefined` | Additional properties to merge into generated JSON Schema |

@@ -1,0 +1,213 @@
+---
+title: "Typia with MCP — Auto-Validated Server Tool Definitions"
+description: "Register Typia controllers as MCP tools with no manual schemas. Argument validation returns structured errors so the LLM can self-correct on invalid calls."
+---
+
+`@typia/mcp` integrates Typia with the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), allowing you to register TypeScript class methods and OpenAPI operations as MCP server tools. Tool schemas are generated automatically from your TypeScript types, and every tool call is validated by Typia before execution. If the LLM provides invalid arguments, the error is returned in a structured JSON format so the model can self-correct.
+
+## Installation
+
+```bash
+npm install @typia/mcp @modelcontextprotocol/sdk
+npm install typia
+npx typia setup
+```
+
+<Note>
+`@typia/mcp` requires `@modelcontextprotocol/sdk` >= 1.0.0 as a peer dependency.
+</Note>
+
+## Registering tools from a TypeScript class
+
+Define a class whose methods represent the MCP tools you want to expose. Pass it to `typia.llm.controller<Class>()` to build a controller, then register it with `registerMcpControllers`:
+
+```typescript
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { registerMcpControllers } from "@typia/mcp";
+import typia from "typia";
+
+class Calculator {
+  /** Add two numbers together. */
+  add(props: { a: number; b: number }): { value: number } {
+    return { value: props.a + props.b };
+  }
+
+  /** Multiply two numbers. */
+  multiply(props: { a: number; b: number }): { value: number } {
+    return { value: props.a * props.b };
+  }
+}
+
+const server = new McpServer({
+  name: "calculator-server",
+  version: "1.0.0",
+});
+
+registerMcpControllers({
+  server,
+  controllers: [
+    typia.llm.controller<Calculator>("Calculator", new Calculator()),
+  ],
+});
+
+const transport = new StdioServerTransport();
+await server.connect(transport);
+```
+
+This registers `add` and `multiply` as MCP tools. The input schema for each tool is derived from the TypeScript parameter type automatically — no Zod schema required.
+
+## Registering tools from an OpenAPI document
+
+You can also convert an existing OpenAPI/Swagger document into MCP tools using `HttpLlm.controller` from `@typia/utils`:
+
+```typescript
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerMcpControllers } from "@typia/mcp";
+import { HttpLlm } from "@typia/utils";
+
+const server = new McpServer({
+  name: "pet-store-server",
+  version: "1.0.0",
+});
+
+registerMcpControllers({
+  server,
+  controllers: [
+    HttpLlm.controller({
+      name: "petStore",
+      document: yourOpenApiDocument,
+      connection: { host: "https://api.example.com" },
+    }),
+  ],
+});
+```
+
+## Combining with McpServer.registerTool
+
+By default, `registerMcpControllers` replaces any tool handlers registered via `McpServer.registerTool()`. If you want Typia tools to coexist with manually registered tools, set `preserve: true`:
+
+```typescript
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerMcpControllers } from "@typia/mcp";
+import { z } from "zod";
+import typia from "typia";
+
+const server = new McpServer({ name: "my-server", version: "1.0.0" });
+
+// Register a manual tool via McpServer.registerTool()
+server.tool(
+  "greet",
+  { name: z.string() },
+  async ({ name }) => ({
+    content: [{ type: "text", text: `Hello, ${name}!` }],
+  }),
+);
+
+// Register Typia controllers — preserve: true keeps the manual tool above
+registerMcpControllers({
+  server,
+  controllers: [
+    typia.llm.controller<Calculator>("Calculator", new Calculator()),
+  ],
+  preserve: true,
+});
+```
+
+<Warning>
+The `preserve: true` mode uses MCP SDK internal private APIs (`_registeredTools`, `_toolHandlersInitialized`) that may break across SDK updates. If a tool name conflict exists between the manually registered tools and a Typia controller method, `registerMcpControllers` throws an error at registration time.
+</Warning>
+
+## API reference
+
+### `registerMcpControllers(props)`
+
+Registers controllers as MCP tools on a `McpServer` or raw `Server` instance.
+
+```typescript
+function registerMcpControllers(props: {
+  /**
+   * Target MCP server to register tools on.
+   * Both McpServer and raw Server are supported.
+   */
+  server: McpServer | Server;
+
+  /**
+   * Controllers to register. Each controller contributes one tool
+   * per method (class controller) or one tool per operation (HTTP controller).
+   */
+  controllers: Array<ILlmController | IHttpLlmController>;
+
+  /**
+   * If true, Typia tools coexist with tools registered via
+   * McpServer.registerTool(). Uses MCP SDK private API.
+   * If false, Typia tools completely replace existing tool handlers.
+   * @default false
+   */
+  preserve?: boolean;
+}): void;
+```
+
+## Validation error format
+
+When a tool call arrives with invalid arguments, `registerMcpControllers` returns an MCP error result with `isError: true` and a structured JSON description of the validation failures:
+
+```json
+{
+  "isError": true,
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"name\":\"John\",\"age\":\"twenty\",\"$errors\":[{\"path\":\"$input.age\",\"expected\":\"number & Type<\\\"uint32\\\">\"}]}"
+    }
+  ]
+}
+```
+
+The LLM receives this feedback in the tool result and can correct the argument values in the next turn.
+
+## Tool input schema
+
+The input schema sent to MCP clients is derived directly from the TypeScript parameter type:
+
+```typescript
+class Calculator {
+  /** Add two numbers. */
+  add(props: { a: number; b: number }): { value: number } {
+    return { value: props.a + props.b };
+  }
+}
+```
+
+Produces the MCP tool definition:
+
+```json
+{
+  "name": "add",
+  "description": "Add two numbers.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "a": { "type": "number" },
+      "b": { "type": "number" }
+    },
+    "required": ["a", "b"],
+    "additionalProperties": false
+  }
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="LLM Overview" href="/llm/overview">
+    Learn about typia.llm.controller and LLM function calling
+  </Card>
+  <Card title="LLM Application" href="/llm/application">
+    Build LLM function-calling applications with Typia
+  </Card>
+  <Card title="@typia/vercel" href="/integrations/vercel-ai">
+    Use Typia tools with the Vercel AI SDK
+  </Card>
+  <Card title="@typia/langchain" href="/integrations/langchain">
+    Use Typia tools with LangChain agents
+  </Card>
+</CardGroup>

@@ -1,0 +1,303 @@
+---
+title: "Type-Safe JSON Stringify — Up to 8x Faster"
+description: "Typia generates optimized JSON stringify from TypeScript types with optional validation — up to 8x faster than JSON.stringify with no runtime reflection."
+---
+
+Typia's JSON stringify functions serialize TypeScript values to JSON strings using code generated at compile time, with no runtime reflection. This page covers all four stringify variants — from the fastest no-validation `stringify` to `validateStringify` which returns detailed error information — plus factory functions for reuse.
+
+## Why it's faster
+
+Standard `JSON.stringify()` is generic: it inspects every value at runtime to decide how to serialize it. Typia's transformer analyzes your TypeScript type at compile time and emits a serializer that only handles exactly the shape your type describes — no branching, no prototype checks, no reflection.
+
+| Function | Speedup vs `JSON.stringify` | Validation |
+|---|---|---|
+| `typia.json.stringify<T>()` | ~8x faster | None |
+| `typia.json.isStringify<T>()` | ~7x faster | Returns `null` on failure |
+| `typia.json.assertStringify<T>()` | ~5x faster | Throws `TypeGuardError` |
+| `typia.json.validateStringify<T>()` | ~5x faster | Returns all errors |
+
+<Note>
+  All stringify functions require Typia's compiler transformer. See [Setup](/setup) to configure your build tool.
+</Note>
+
+## `typia.json.stringify<T>(input)`
+
+Converts a value to a JSON string without validation. Use this when you are certain the input already conforms to `T` — for example, after a prior `typia.assert<T>()` call.
+
+```typescript
+function stringify<T>(input: T): string;
+```
+
+<ParamField path="input" type="T" required>
+  The value to serialize. Must already conform to `T` — no validation is performed.
+</ParamField>
+
+**Returns** `string` — the JSON representation of `input`.
+
+### Example
+
+```typescript
+import typia from "typia";
+
+interface IProduct {
+  id: number;
+  name: string;
+  price: number;
+  tags: string[];
+}
+
+const product: IProduct = {
+  id: 1,
+  name: "Laptop",
+  price: 999.99,
+  tags: ["electronics", "portable"],
+};
+
+// No validation — fastest option
+const json = typia.json.stringify<IProduct>(product);
+// '{"id":1,"name":"Laptop","price":999.99,"tags":["electronics","portable"]}'
+```
+
+<Warning>
+  `stringify` skips validation entirely. If `input` does not actually match type `T`, the output JSON may be incorrect or incomplete. Use `assertStringify` or `validateStringify` when the input comes from an untrusted source.
+</Warning>
+
+## `typia.json.assertStringify<T>(input, errorFactory?)`
+
+Validates the input against type `T`, then serializes it. Throws `TypeGuardError` on the first type mismatch found.
+
+```typescript
+function assertStringify<T>(
+  input: T,
+  errorFactory?: (props: TypeGuardError.IProps) => Error,
+): string;
+```
+
+<ParamField path="input" type="T" required>
+  The value to validate and serialize.
+</ParamField>
+
+<ParamField path="errorFactory" type="(props: TypeGuardError.IProps) => Error">
+  Optional factory to produce a custom error. Receives the standard `TypeGuardError.IProps` with `path`, `expected`, and `value`. When omitted, a `TypeGuardError` is thrown.
+</ParamField>
+
+**Returns** `string` — the JSON representation of `input`.
+
+**Throws** `TypeGuardError` (or your custom error) when `input` does not match `T`.
+
+### Example
+
+<Tabs>
+  <Tab title="Valid input">
+    ```typescript
+    import typia from "typia";
+
+    interface IUser {
+      id: number;
+      name: string;
+      email: string;
+    }
+
+    const user = { id: 1, name: "Alice", email: "alice@example.com" };
+    const json = typia.json.assertStringify<IUser>(user);
+    // '{"id":1,"name":"Alice","email":"alice@example.com"}'
+    ```
+  </Tab>
+  <Tab title="Invalid input">
+    ```typescript
+    import typia from "typia";
+
+    interface IUser {
+      id: number;
+      name: string;
+      email: string;
+    }
+
+    // email is missing — throws TypeGuardError
+    try {
+      const json = typia.json.assertStringify<IUser>({
+        id: 1,
+        name: "Alice",
+      } as any);
+    } catch (err) {
+      // TypeGuardError: $input.email is undefined, expected string
+    }
+    ```
+  </Tab>
+  <Tab title="Custom error">
+    ```typescript
+    import typia, { TypeGuardError } from "typia";
+
+    const json = typia.json.assertStringify<IUser>(
+      input,
+      (props) => new BadRequestError(`Validation failed at ${props.path}`),
+    );
+    ```
+  </Tab>
+</Tabs>
+
+## `typia.json.isStringify<T>(input)`
+
+Validates the input against type `T` and returns `null` instead of throwing on failure. Useful in contexts where throwing is undesirable.
+
+```typescript
+function isStringify<T>(input: T): string | null;
+```
+
+<ParamField path="input" type="T" required>
+  The value to check and serialize.
+</ParamField>
+
+**Returns** `string` if valid, `null` if the input does not match `T`.
+
+### Example
+
+```typescript
+import typia from "typia";
+
+interface IOrder {
+  orderId: string;
+  total: number;
+}
+
+const result = typia.json.isStringify<IOrder>(rawInput);
+
+if (result === null) {
+  console.error("Input did not match IOrder");
+} else {
+  sendToQueue(result);
+}
+```
+
+## `typia.json.validateStringify<T>(input)`
+
+Validates the input and returns all errors found — not just the first. Returns an `IValidation` discriminated union.
+
+```typescript
+function validateStringify<T>(input: T): IValidation<string>;
+```
+
+<ParamField path="input" type="T" required>
+  The value to validate and serialize.
+</ParamField>
+
+**Returns** `IValidation<string>`:
+- On success: `{ success: true, data: string }` where `data` is the JSON string
+- On failure: `{ success: false, data: unknown, errors: IValidation.IError[] }`
+
+Each `IValidation.IError` has:
+- `path`: dot-notation path from `$input` to the failing property
+- `expected`: human-readable expected type
+- `value`: the actual value found
+
+### Example
+
+```typescript
+import typia, { IValidation } from "typia";
+
+interface IInvoice {
+  id: string;
+  amount: number;
+  currency: "USD" | "EUR" | "GBP";
+  items: { description: string; quantity: number }[];
+}
+
+const result = typia.json.validateStringify<IInvoice>(rawInput);
+
+if (result.success) {
+  await saveInvoice(result.data); // result.data is the JSON string
+} else {
+  const messages = result.errors.map(
+    (e) => `${e.path}: expected ${e.expected}, got ${JSON.stringify(e.value)}`,
+  );
+  console.error("Validation errors:", messages);
+}
+```
+
+## Choosing the right variant
+
+<Tabs>
+  <Tab title="When to use each">
+    | Scenario | Recommended function |
+    |---|---|
+    | Input already validated earlier in request pipeline | `stringify` |
+    | API response — want to fail fast on bad data | `assertStringify` |
+    | Optional serialization — null signals skip | `isStringify` |
+    | User-facing errors — show all problems at once | `validateStringify` |
+  </Tab>
+  <Tab title="Comparison">
+    ```typescript
+    import typia from "typia";
+
+    // Fastest — no validation
+    typia.json.stringify<T>(input);
+
+    // Throws TypeGuardError on first mismatch
+    typia.json.assertStringify<T>(input);
+
+    // Returns null on mismatch
+    typia.json.isStringify<T>(input);
+
+    // Returns all errors
+    typia.json.validateStringify<T>(input);
+    ```
+  </Tab>
+</Tabs>
+
+## Factory functions
+
+Factory functions create a reusable serializer for a single type. Call the factory once and reuse the returned function across many calls — useful when you process the same type in a loop or want to pass the serializer as a dependency.
+
+```typescript
+// Create once
+const stringifyUser = typia.json.createStringify<IUser>();
+const assertStringifyUser = typia.json.createAssertStringify<IUser>();
+const isStringifyUser = typia.json.createIsStringify<IUser>();
+const validateStringifyUser = typia.json.createValidateStringify<IUser>();
+
+// Reuse many times
+users.map(stringifyUser);
+```
+
+### All factory signatures
+
+```typescript
+// No validation
+function createStringify<T>(): (input: T) => string;
+
+// Throws on mismatch
+function createAssertStringify<T>(
+  errorFactory?: (props: TypeGuardError.IProps) => Error,
+): (input: unknown) => string;
+
+// Returns null on mismatch
+function createIsStringify<T>(): (input: unknown) => string | null;
+
+// Returns all errors
+function createValidateStringify<T>(): (input: unknown) => IValidation<string>;
+```
+
+### Example
+
+```typescript
+import typia from "typia";
+
+interface IEvent {
+  type: string;
+  timestamp: number;
+  payload: Record<string, unknown>;
+}
+
+// Build once at module level
+const serializeEvent = typia.json.createAssertStringify<IEvent>();
+
+// Use in hot path
+function publishEvent(event: IEvent): void {
+  const json = serializeEvent(event); // type-safe, fast
+  broker.publish(json);
+}
+```
+
+<Tip>
+  Factory functions are useful in NestJS services, Express middleware, or anywhere you want to create a typed serializer once and inject it as a dependency.
+</Tip>

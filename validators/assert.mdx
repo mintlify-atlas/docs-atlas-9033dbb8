@@ -1,0 +1,297 @@
+---
+title: "typia.assert: Throwing Runtime Type Assertions"
+description: "typia.assert throws TypeGuardError on the first type mismatch. Covers assertEquals, assertGuard, assertGuardEquals, and custom error factory usage."
+---
+
+The `assert` family of functions validate a value against a TypeScript type at runtime and throw a `TypeGuardError` on the **first** property that does not match. They are the fastest option when you want validation that fails immediately — ideal for request parsing, config loading, or any code path where continuing after a type mismatch makes no sense.
+
+## typia.assert\<T\>
+
+`typia.assert<T>(input)` checks that `input` conforms to type `T`. On success it returns the input typed as `T`. On the first mismatch it throws `TypeGuardError`.
+
+```typescript
+import typia from "typia";
+
+interface User {
+  id: number;
+  email: string;
+  age: number;
+}
+
+// Succeeds — returns input as User
+const user = typia.assert<User>({
+  id: 1,
+  email: "alice@example.com",
+  age: 30,
+});
+
+// Throws TypeGuardError: invalid type on input.age, expect to be number
+typia.assert<User>({
+  id: 1,
+  email: "alice@example.com",
+  age: "thirty", // wrong type
+});
+```
+
+<ParamField path="input" type="T | unknown" required>
+  The value to validate. Can be typed as `T` (already-narrowed) or `unknown` (runtime data from an external source).
+</ParamField>
+
+<ParamField path="errorFactory" type="(props: TypeGuardError.IProps) => Error">
+  Optional custom error factory. When provided, typia calls this function instead of constructing a `TypeGuardError`. Use it to throw your own error class or to add context.
+</ParamField>
+
+### Return value
+
+Returns the input typed as `T`. Downstream code can use the return value without any further type cast.
+
+## TypeGuardError structure
+
+`TypeGuardError` extends `Error` and carries structured information about the first failure:
+
+```typescript
+class TypeGuardError<T = any> extends Error {
+  readonly method: string;          // e.g. "typia.assert"
+  readonly path: string | undefined; // e.g. "input.user.age"
+  readonly expected: string;        // e.g. "number & ExclusiveMinimum<0>"
+  readonly value: unknown;          // actual value that failed
+  readonly description?: string;    // human-readable context (optional)
+}
+```
+
+`TypeGuardError.IProps` is the shape passed to a custom error factory:
+
+```typescript
+interface IProps {
+  method: string;
+  path?: string;
+  expected: string;
+  value: unknown;
+  description?: string;
+  message?: string;
+}
+```
+
+### Reading a TypeGuardError
+
+```typescript
+import typia, { TypeGuardError } from "typia";
+
+try {
+  typia.assert<User>({ id: "not-a-number", email: "x@x.com", age: 25 });
+} catch (err) {
+  if (err instanceof TypeGuardError) {
+    console.log(err.method);   // "typia.assert"
+    console.log(err.path);     // "input.id"
+    console.log(err.expected); // "number"
+    console.log(err.value);    // "not-a-number"
+  }
+}
+```
+
+### Custom error factory
+
+```typescript
+import typia, { TypeGuardError } from "typia";
+
+class ValidationError extends Error {
+  constructor(
+    public readonly path: string | undefined,
+    public readonly expected: string,
+  ) {
+    super(`Validation failed at ${path}: expected ${expected}`);
+  }
+}
+
+const user = typia.assert<User>(rawInput, (props) => {
+  return new ValidationError(props.path, props.expected);
+});
+```
+
+## typia.assertEquals\<T\> — strict mode
+
+`assertEquals<T>` behaves identically to `assert<T>` except it also **rejects properties not declared in `T`**. When an extra property is detected, `expected` in the error will be `"undefined"`.
+
+```typescript
+import typia from "typia";
+
+interface Config {
+  host: string;
+  port: number;
+}
+
+// Throws because "debug" is not in Config
+typia.assertEquals<Config>({
+  host: "localhost",
+  port: 3000,
+  debug: true, // superfluous property
+});
+// TypeGuardError: invalid type on input.debug, expect to be undefined
+```
+
+<Tip>
+  Use `assertEquals` when deserializing configuration files or API request bodies where unexpected keys indicate a misconfiguration or client error.
+</Tip>
+
+## typia.assertGuard\<T\>
+
+`assertGuard<T>(input)` returns `asserts input is T` — it narrows the type of `input` in the current scope without returning a value. Use it when you need type narrowing as a side effect but do not need the return value.
+
+```typescript
+import typia from "typia";
+
+function processRequest(input: unknown): void {
+  typia.assertGuard<User>(input);
+  // TypeScript now knows: input is User
+  console.log(input.email); // no type error
+}
+```
+
+<Note>
+  TypeScript requires that assertion guard functions are called as standalone statements, not in expressions. `const x = typia.assertGuard<T>(input)` produces a compile error because the return type is `void`.
+</Note>
+
+## typia.assertGuardEquals\<T\>
+
+Combines `assertGuard` with strict equality checking. Narrows `input` to `T` and rejects any extra properties — no return value.
+
+```typescript
+import typia from "typia";
+
+function handleWebhook(payload: unknown): void {
+  typia.assertGuardEquals<WebhookEvent>(payload);
+  // payload is narrowed to WebhookEvent
+  // extra properties would have thrown
+  processEvent(payload);
+}
+```
+
+## Factory functions
+
+Use factory functions when you want to create a validator once and store or pass it as a value. The generic type `T` **must** be specified — omitting it causes a compile-time error.
+
+<CodeGroup>
+
+```typescript createAssert
+import typia from "typia";
+
+interface Product {
+  id: number;
+  name: string;
+  price: number;
+}
+
+const assertProduct = typia.createAssert<Product>();
+
+// Reuse across many call sites
+const p1 = assertProduct(rawData1);
+const p2 = assertProduct(rawData2);
+```
+
+```typescript createAssertEquals
+import typia from "typia";
+
+const assertEqualsProduct = typia.createAssertEquals<Product>();
+
+// Strict — rejects extra properties
+const product = assertEqualsProduct(strictData);
+```
+
+```typescript createAssertGuard
+import typia, { AssertionGuard } from "typia";
+
+// Must declare the variable type explicitly
+const guardProduct: AssertionGuard<Product> =
+  typia.createAssertGuard<Product>();
+
+guardProduct(unknownValue);
+// unknownValue is narrowed to Product after this call
+```
+
+```typescript createAssertGuardEquals
+import typia, { AssertionGuard } from "typia";
+
+const guardEqualsProduct: AssertionGuard<Product> =
+  typia.createAssertGuardEquals<Product>();
+
+guardEqualsProduct(unknownValue);
+```
+
+</CodeGroup>
+
+<Warning>
+  For `createAssertGuard` and `createAssertGuardEquals`, TypeScript requires an explicit variable type annotation (`AssertionGuard<T>`). Without it, the compiler cannot infer the assertion guard return type and will produce an error.
+</Warning>
+
+## All assert variants at a glance
+
+<Tabs>
+  <Tab title="assert">
+    ```typescript
+    function assert<T>(
+      input: T | unknown,
+      errorFactory?: (props: TypeGuardError.IProps) => Error,
+    ): T
+    ```
+    Throws on first error, returns `T`. Allows extra properties.
+  </Tab>
+  <Tab title="assertEquals">
+    ```typescript
+    function assertEquals<T>(
+      input: T | unknown,
+      errorFactory?: (props: TypeGuardError.IProps) => Error,
+    ): T
+    ```
+    Throws on first error, returns `T`. Rejects extra properties.
+  </Tab>
+  <Tab title="assertGuard">
+    ```typescript
+    function assertGuard<T>(
+      input: T | unknown,
+      errorFactory?: (props: TypeGuardError.IProps) => Error,
+    ): asserts input is T
+    ```
+    Throws on first error, narrows type in-place. Allows extra properties.
+  </Tab>
+  <Tab title="assertGuardEquals">
+    ```typescript
+    function assertGuardEquals<T>(
+      input: T | unknown,
+      errorFactory?: (props: TypeGuardError.IProps) => Error,
+    ): asserts input is T
+    ```
+    Throws on first error, narrows type in-place. Rejects extra properties.
+  </Tab>
+</Tabs>
+
+## Complete example
+
+```typescript
+import typia, { TypeGuardError } from "typia";
+import { tags } from "typia";
+
+interface CreateUserRequest {
+  username: string & tags.MinLength<3> & tags.MaxLength<20>;
+  email: string & tags.Format<"email">;
+  age: number & tags.Minimum<0> & tags.Maximum<120>;
+}
+
+// Express-style request handler
+function createUser(rawBody: unknown) {
+  let body: CreateUserRequest;
+  try {
+    body = typia.assert<CreateUserRequest>(rawBody);
+  } catch (err) {
+    if (err instanceof TypeGuardError) {
+      return {
+        status: 400,
+        error: `Invalid field "${err.path}": expected ${err.expected}, got ${JSON.stringify(err.value)}`,
+      };
+    }
+    throw err;
+  }
+
+  // body is now typed as CreateUserRequest
+  return { status: 201, id: generateId(), ...body };
+}
+```

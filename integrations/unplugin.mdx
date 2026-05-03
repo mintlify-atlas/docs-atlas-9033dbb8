@@ -1,0 +1,292 @@
+---
+title: "Typia Bundler Plugin — @typia/unplugin for Vite & More"
+description: "Apply Typia's TypeScript transformer at build time with @typia/unplugin. Supports Vite, Webpack, Rollup, esbuild, Next.js, Bun, Rspack, Rolldown, and Farm."
+---
+
+`@typia/unplugin` is a bundler plugin that applies Typia's TypeScript transformation at build time, without requiring `ts-patch` or a custom TypeScript compiler. It is the recommended approach for frontend projects and any project that uses a bundler rather than `tsc` directly.
+
+When you call `typia.assert<T>(value)` or any other Typia function, the plugin intercepts those calls during the bundle step and replaces them with the generated runtime validation code — the same code that `ts-patch` would produce at compile time.
+
+<Note>
+If you are building a Node.js backend that uses `tsc` directly, see [Setup Wizard](/integrations/setup-wizard) for the `ts-patch` transformer approach instead.
+</Note>
+
+## Installation
+
+<Steps>
+  <Step title="Install and set up typia">
+    Install `typia` first and run the setup wizard to configure your `tsconfig.json`:
+
+    <Tabs>
+      <Tab title="npm">
+        ```bash
+        npm install typia
+        npx typia setup
+        ```
+      </Tab>
+      <Tab title="pnpm">
+        ```bash
+        pnpm install typia
+        pnpm typia setup --manager pnpm
+        ```
+      </Tab>
+      <Tab title="yarn">
+        ```bash
+        yarn add typia
+        yarn typia setup --manager yarn
+        ```
+      </Tab>
+      <Tab title="bun">
+        ```bash
+        bun add typia
+        bun typia setup
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Install @typia/unplugin">
+    <Tabs>
+      <Tab title="npm">
+        ```bash
+        npm install -D @typia/unplugin
+        ```
+      </Tab>
+      <Tab title="pnpm">
+        ```bash
+        pnpm install -D @typia/unplugin
+        ```
+      </Tab>
+      <Tab title="yarn">
+        ```bash
+        yarn add -D @typia/unplugin
+        ```
+      </Tab>
+      <Tab title="bun">
+        ```bash
+        bun add -D @typia/unplugin
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Add the plugin to your bundler">
+    Choose your bundler below and add the plugin to its configuration.
+  </Step>
+</Steps>
+
+## Bundler configuration
+
+Each bundler has a dedicated entry point under `@typia/unplugin/<bundler>`. Import from the correct path for your tool.
+
+<Tabs>
+  <Tab title="Vite">
+    ```typescript
+    // vite.config.ts
+    import UnpluginTypia from "@typia/unplugin/vite";
+
+    export default defineConfig({
+      plugins: [
+        UnpluginTypia({ /* options */ }), // place before other plugins like react, svelte, etc.
+      ],
+    });
+    ```
+
+    <Note>
+      When using types imported from non-relative paths (e.g. `tsconfig.json` `compilerOptions.paths` or `baseUrl`), define matching aliases under `resolve.alias` in your Vite config so Vite can resolve them.
+    </Note>
+  </Tab>
+  <Tab title="Next.js">
+    ```javascript
+    // next.config.mjs
+    import unTypiaNext from "@typia/unplugin/next";
+
+    /** @type {import('next').NextConfig} */
+    const nextConfig = { /* your Next.js config */ };
+
+    /** @type {import("@typia/unplugin").Options} */
+    const unpluginTypiaOptions = { /* your @typia/unplugin options */ };
+
+    export default unTypiaNext(nextConfig, unpluginTypiaOptions);
+
+    // Options can be omitted when using defaults:
+    // export default unTypiaNext(nextConfig);
+    ```
+  </Tab>
+  <Tab title="Webpack">
+    ```javascript
+    // webpack.config.js
+    const { default: UnpluginTypia } = require("@typia/unplugin/webpack");
+
+    module.exports = {
+      plugins: [
+        UnpluginTypia({ /* options */ }),
+      ],
+    };
+    ```
+  </Tab>
+  <Tab title="Rollup">
+    ```typescript
+    // rollup.config.js
+    import UnpluginTypia from "@typia/unplugin/rollup";
+
+    export default {
+      plugins: [
+        UnpluginTypia({ /* options */ }),
+      ],
+    };
+    ```
+  </Tab>
+  <Tab title="esbuild">
+    ```typescript
+    // esbuild.config.js
+    import UnpluginTypia from "@typia/unplugin/esbuild";
+
+    export default {
+      plugins: [
+        UnpluginTypia({ /* options */ }),
+      ],
+    };
+    ```
+  </Tab>
+  <Tab title="Rspack">
+    ```javascript
+    // rspack.config.js
+    const { default: UnpluginTypia } = require("@typia/unplugin/rspack");
+
+    module.exports = {
+      plugins: [
+        UnpluginTypia({ /* options */ }),
+      ],
+    };
+    ```
+  </Tab>
+  <Tab title="Rolldown">
+    ```typescript
+    // rolldown.config.js
+    import UnpluginTypia from "@typia/unplugin/rolldown";
+
+    export default {
+      plugins: [
+        UnpluginTypia({ /* options */ }),
+      ],
+    };
+    ```
+  </Tab>
+  <Tab title="Farm">
+    ```typescript
+    // farm.config.ts
+    import UnpluginTypia from "@typia/unplugin/farm";
+
+    export default {
+      plugins: [
+        UnpluginTypia({ /* options */ }),
+      ],
+    };
+    ```
+  </Tab>
+  <Tab title="Bun">
+    **Build script** — use the Bun bundler plugin API:
+
+    ```typescript
+    // build.ts
+    import UnpluginTypia from "@typia/unplugin/bun";
+
+    await Bun.build({
+      entrypoints: ["./index.ts"],
+      outdir: "./out",
+      plugins: [
+        UnpluginTypia({ /* options */ }),
+      ],
+    });
+    ```
+
+    **Runtime plugin** — preload the plugin before running scripts:
+
+    ```typescript
+    // preload.ts
+    import { plugin } from "bun";
+    import UnpluginTypia from "@typia/unplugin/bun";
+
+    plugin(UnpluginTypia({ /* options */ }));
+    ```
+
+    ```toml
+    # bunfig.toml
+    preload = ["./preload.ts"]
+
+    [test]
+    preload = ["./preload.ts"]
+    ```
+  </Tab>
+</Tabs>
+
+## Plugin options
+
+All options are optional. The defaults work for most projects.
+
+```typescript
+import type { Options } from "@typia/unplugin";
+
+const options: Options = {
+  /**
+   * Files to include. Not merged — overrides default.
+   * @default [/\.[cm]?tsx?$/, /\.svelte$/]
+   */
+  include?: FilterPattern;
+
+  /**
+   * Files to exclude. Not merged — overrides default.
+   * @default [/node_modules/]
+   */
+  exclude?: FilterPattern;
+
+  /**
+   * Plugin ordering. Only applies to Vite and Webpack.
+   * @default "pre"
+   */
+  enforce?: "pre" | "post";
+
+  /**
+   * Path to tsconfig.json. Auto-detected if omitted.
+   */
+  tsconfig?: string;
+
+  /**
+   * Pass-through options for the Typia transformer.
+   */
+  typia?: ITransformOptions;
+
+  /**
+   * Enable file-level caching in node_modules/.cache/unplugin_typia.
+   * Set CACHE_DIR env var to override the cache location.
+   * @default false
+   */
+  cache?: boolean;
+
+  /**
+   * Log level. Set "verbose" to see cache hits/misses.
+   * @default true
+   */
+  log?: boolean | "verbose";
+};
+```
+
+## Supported file extensions
+
+The plugin processes `.ts`, `.tsx`, `.mts`, `.mtsx`, and `.svelte` files (Svelte files only when the `<script>` tag has `lang="ts"`).
+
+## Unplugin vs ts-patch transformer
+
+Use `@typia/unplugin` when you are building with a bundler (Vite, Webpack, Next.js, etc.). The plugin hooks into the bundler's transform pipeline and does not require any changes to how you invoke TypeScript.
+
+Use the `ts-patch` transformer (configured in `tsconfig.json`) when you build directly with `tsc` — for example, in a NestJS or tRPC server that compiles with `tsc` and does not use a bundler. See [Setup Wizard](/integrations/setup-wizard) for that approach.
+
+<CardGroup cols={2}>
+  <Card title="Setup Wizard" href="/integrations/setup-wizard">
+    Configure ts-patch and tsconfig.json for tsc-based projects
+  </Card>
+  <Card title="Runtime Validators" href="/validators/overview">
+    Learn about assert, is, validate, and validation tags
+  </Card>
+</CardGroup>

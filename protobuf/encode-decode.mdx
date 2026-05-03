@@ -1,0 +1,452 @@
+---
+title: "Typia Protocol Buffer Encode and Decode API Reference"
+description: "Complete reference for typia.protobuf encode and decode functions: plain, assert, is, validate variants, factory functions, and a full end-to-end example."
+keywords: ["protobuf", "encode", "decode", "typia", "assertEncode", "assertDecode", "Uint8Array", "binary"]
+---
+
+Typia provides eight encode/decode functions for Protocol Buffers binary data, organized in four safety levels: plain (no validation), `is` (boolean check), `assert` (throw on failure), and `validate` (full error list). Each variant also has a factory form that returns a reusable function bound to a specific type.
+
+## Encoding: TypeScript → `Uint8Array`
+
+### `typia.protobuf.encode<T>(input)`
+
+Converts a TypeScript value to Protocol Buffer binary. **No runtime validation** is performed — the input is assumed to already conform to `T`.
+
+```typescript
+import typia from "typia";
+
+interface IPoint {
+  x: number;
+  y: number;
+  label: string;
+}
+
+const point: IPoint = { x: 1.5, y: 2.5, label: "origin" };
+const buffer: Uint8Array = typia.protobuf.encode<IPoint>(point);
+```
+
+<ParamField path="input" type="T" required>
+  The value to encode. Must conform to type `T` (not validated at runtime).
+</ParamField>
+
+**Returns:** `Uint8Array` — the Protocol Buffer binary payload.
+
+---
+
+### `typia.protobuf.assertEncode<T>(input, errorFactory?)`
+
+Validates that `input` conforms to `T`, then encodes it. Throws `TypeGuardError` on the first validation failure.
+
+```typescript
+import typia from "typia";
+import { tags } from "typia";
+
+interface IUser {
+  id: number & tags.Type<"uint32">;
+  name: string;
+  email: string & tags.Format<"email">;
+}
+
+// Throws TypeGuardError if email format is invalid, etc.
+const buffer: Uint8Array = typia.protobuf.assertEncode<IUser>({
+  id: 1,
+  name: "Alice",
+  email: "alice@example.com",
+});
+```
+
+<ParamField path="input" type="T" required>
+  The value to validate and encode.
+</ParamField>
+
+<ParamField path="errorFactory" type="(props: TypeGuardError.IProps) => Error">
+  Optional. Provide a custom factory to replace `TypeGuardError` with your own error class.
+</ParamField>
+
+**Returns:** `Uint8Array`
+**Throws:** `TypeGuardError` (or your custom error) when validation fails.
+
+---
+
+### `typia.protobuf.isEncode<T>(input)`
+
+Type-checks `input` against `T`, then encodes. Returns `null` instead of throwing on failure — useful when you want to check success with a simple null test.
+
+```typescript
+import typia from "typia";
+
+interface IMessage {
+  id: number;
+  body: string;
+}
+
+const result: Uint8Array | null = typia.protobuf.isEncode<IMessage>({
+  id: 42,
+  body: "hello",
+});
+
+if (result === null) {
+  console.error("Input does not match IMessage");
+} else {
+  // send result over the wire
+}
+```
+
+<ParamField path="input" type="T" required>
+  The value to type-check and encode.
+</ParamField>
+
+**Returns:** `Uint8Array` if valid, `null` if the input does not conform to `T`.
+
+---
+
+### `typia.protobuf.validateEncode<T>(input)`
+
+Validates `input` against `T` and collects **all** validation errors before encoding. Returns an `IValidation` discriminated union.
+
+```typescript
+import typia, { tags } from "typia";
+import type { IValidation } from "typia";
+
+interface IOrder {
+  orderId: string & tags.Format<"uuid">;
+  quantity: number & tags.Type<"uint32"> & tags.Minimum<1>;
+}
+
+const result: IValidation<Uint8Array> =
+  typia.protobuf.validateEncode<IOrder>({
+    orderId: "not-a-uuid",
+    quantity: 0,
+  });
+
+if (result.success) {
+  transmit(result.data); // Uint8Array
+} else {
+  console.error(result.errors); // IValidation.IError[]
+}
+```
+
+<ParamField path="input" type="T" required>
+  The value to validate and encode.
+</ParamField>
+
+**Returns:** `IValidation<Uint8Array>` — `{ success: true, data: Uint8Array }` or `{ success: false, errors: IValidation.IError[] }`.
+
+---
+
+## Decoding: `Uint8Array` → TypeScript
+
+<Warning>
+Decode functions validate only custom tag constraints (e.g., `Minimum<7>`, `Format<"uuid">`), **not** structural type correctness. If you decode binary data that was not produced from a `T`-typed value, the decoded output may have incorrect field types or missing fields. Always use a validated encode function (`assertEncode`, `isEncode`, `validateEncode`) on the sender side.
+</Warning>
+
+### `typia.protobuf.decode<T>(input)`
+
+Decodes Protocol Buffer binary to a TypeScript value. No validation is performed.
+
+```typescript
+import typia from "typia";
+
+interface IPoint {
+  x: number;
+  y: number;
+  label: string;
+}
+
+const buffer: Uint8Array = /* received from network */ new Uint8Array();
+const point: IPoint = typia.protobuf.decode<IPoint>(buffer);
+```
+
+<ParamField path="input" type="Uint8Array" required>
+  The Protocol Buffer binary payload.
+</ParamField>
+
+**Returns:** `Resolved<T>` — the decoded TypeScript value.
+
+---
+
+### `typia.protobuf.assertDecode<T>(input, errorFactory?)`
+
+Decodes Protocol Buffer binary, then validates custom tag constraints. Throws `TypeGuardError` if any tag constraint is violated.
+
+```typescript
+import typia, { tags } from "typia";
+
+interface ISensor {
+  sensorId: string & tags.Format<"uuid">;
+  temperature: number & tags.Minimum<-273.15>;
+}
+
+const value: ISensor = typia.protobuf.assertDecode<ISensor>(buffer);
+// Throws if sensorId is not UUID format or temperature is below absolute zero
+```
+
+<ParamField path="input" type="Uint8Array" required>
+  The Protocol Buffer binary payload.
+</ParamField>
+
+<ParamField path="errorFactory" type="(props: TypeGuardError.IProps) => Error">
+  Optional. Provide a custom factory to replace `TypeGuardError` with your own error class.
+</ParamField>
+
+**Returns:** `Resolved<T>`
+**Throws:** `TypeGuardError` (or your custom error) when a tag constraint fails.
+
+---
+
+### `typia.protobuf.isDecode<T>(input)`
+
+Decodes Protocol Buffer binary, then checks custom tag constraints. Returns `null` instead of throwing on failure.
+
+```typescript
+import typia, { tags } from "typia";
+
+interface ICoordinate {
+  lat: number & tags.Minimum<-90> & tags.Maximum<90>;
+  lng: number & tags.Minimum<-180> & tags.Maximum<180>;
+}
+
+const coord: ICoordinate | null = typia.protobuf.isDecode<ICoordinate>(buffer);
+if (coord === null) {
+  console.warn("Received out-of-range coordinate");
+}
+```
+
+<ParamField path="input" type="Uint8Array" required>
+  The Protocol Buffer binary payload.
+</ParamField>
+
+**Returns:** `Resolved<T>` if all tag constraints pass, `null` otherwise.
+
+---
+
+### `typia.protobuf.validateDecode<T>(input)`
+
+Decodes Protocol Buffer binary, then collects all custom tag constraint violations.
+
+```typescript
+import typia, { tags } from "typia";
+import type { IValidation } from "typia";
+
+interface IProduct {
+  sku: string & tags.MinLength<3>;
+  price: number & tags.Type<"float"> & tags.Minimum<0>;
+}
+
+const result: IValidation<IProduct> =
+  typia.protobuf.validateDecode<IProduct>(buffer);
+
+if (!result.success) {
+  for (const err of result.errors) {
+    console.error(`${err.path}: ${err.expected}`);
+  }
+}
+```
+
+<ParamField path="input" type="Uint8Array" required>
+  The Protocol Buffer binary payload.
+</ParamField>
+
+**Returns:** `IValidation<Resolved<T>>` — `{ success: true, data: T }` or `{ success: false, errors: IValidation.IError[] }`.
+
+---
+
+## Choosing the right variant
+
+<Tabs>
+  <Tab title="Assert variants">
+    Use `assertEncode` / `assertDecode` when:
+
+    - You want the operation to fail loudly with a thrown error
+    - You are in a request handler and want to propagate errors up the call stack
+    - You want to catch the first problem quickly rather than enumerate all errors
+
+    ```typescript
+    import typia from "typia";
+
+    // In an Express handler
+    app.post("/sensor", (req, res) => {
+      const buffer = typia.protobuf.assertEncode<ISensor>(req.body);
+      // TypeGuardError propagates to your error middleware if input is invalid
+      forwardToMessageQueue(buffer);
+      res.sendStatus(202);
+    });
+    ```
+  </Tab>
+  <Tab title="Is variants">
+    Use `isEncode` / `isDecode` when:
+
+    - You want a simple truthy/null check without try/catch
+    - You handle the failure inline (e.g., skip, log, or return a default)
+
+    ```typescript
+    import typia from "typia";
+
+    const buffer = typia.protobuf.isEncode<IEvent>(event);
+    if (buffer) {
+      emit(buffer);
+    } else {
+      metrics.increment("invalid_event");
+    }
+    ```
+  </Tab>
+  <Tab title="Validate variants">
+    Use `validateEncode` / `validateDecode` when:
+
+    - You need to report **all** errors to the caller (e.g., API response body)
+    - You are building a validation UI or diagnostic tool
+
+    ```typescript
+    import typia from "typia";
+
+    const result = typia.protobuf.validateEncode<IOrder>(order);
+    if (!result.success) {
+      return res.status(400).json({ errors: result.errors });
+    }
+    ```
+  </Tab>
+  <Tab title="Plain variants">
+    Use `encode` / `decode` when:
+
+    - The input is already validated upstream (e.g., you just called `assertDecode` a line earlier)
+    - You are in a hot path and want zero validation overhead
+
+    ```typescript
+    import typia from "typia";
+
+    // Input came from assertDecode — already validated
+    const recoded = typia.protobuf.encode<IPoint>(point);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Factory functions
+
+Each function has a factory variant that returns a reusable, pre-compiled function for a given type. This is more efficient than calling the generic form in a loop, because the compiled codec is only created once.
+
+```typescript
+import typia from "typia";
+
+interface IMetric {
+  name: string;
+  value: number;
+  timestamp: bigint;
+}
+
+// Create once
+const encodeMetric = typia.protobuf.createEncode<IMetric>();
+const decodeMetric = typia.protobuf.createDecode<IMetric>();
+
+// Reuse many times
+const buffer: Uint8Array = encodeMetric({ name: "cpu", value: 0.72, timestamp: BigInt(Date.now()) });
+const metric: IMetric = decodeMetric(buffer);
+```
+
+All eight factory functions follow the same pattern:
+
+| Factory function | Returns |
+|---|---|
+| `typia.protobuf.createEncode<T>()` | `(input: T) => Uint8Array` |
+| `typia.protobuf.createAssertEncode<T>(errorFactory?)` | `(input: T) => Uint8Array` |
+| `typia.protobuf.createIsEncode<T>()` | `(input: T) => Uint8Array \| null` |
+| `typia.protobuf.createValidateEncode<T>()` | `(input: T) => IValidation<Uint8Array>` |
+| `typia.protobuf.createDecode<T>()` | `(input: Uint8Array) => Resolved<T>` |
+| `typia.protobuf.createAssertDecode<T>(errorFactory?)` | `(input: Uint8Array) => Resolved<T>` |
+| `typia.protobuf.createIsDecode<T>()` | `(input: Uint8Array) => Resolved<T> \| null` |
+| `typia.protobuf.createValidateDecode<T>()` | `(input: Uint8Array) => IValidation<Resolved<T>>` |
+
+<Tip>
+Factory functions are especially useful in NestJS pipes, Express middleware, or anywhere a codec function is stored on a class instance or module-level constant.
+</Tip>
+
+---
+
+## End-to-end example
+
+This example shows a complete round-trip: define a TypeScript interface, encode a value safely, transmit the binary, then decode and validate on the other side.
+
+```typescript
+import typia, { tags } from "typia";
+
+// --- Shared type definition (used on both sender and receiver) ---
+
+interface IOrder {
+  orderId: string & tags.Format<"uuid">;
+  customerId: number & tags.Type<"uint32">;
+  items: IOrderItem[];
+  totalCents: number & tags.Type<"int64"> & tags.Minimum<0>;
+}
+
+interface IOrderItem {
+  productId: string & tags.Format<"uuid">;
+  quantity: number & tags.Type<"uint32"> & tags.Minimum<1>;
+  priceCents: number & tags.Type<"int64"> & tags.Minimum<0>;
+}
+
+// --- Sender side ---
+
+const order: IOrder = {
+  orderId: "550e8400-e29b-41d4-a716-446655440000",
+  customerId: 12345,
+  items: [
+    {
+      productId: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      quantity: 2,
+      priceCents: 999,
+    },
+  ],
+  totalCents: 1998,
+};
+
+// assertEncode validates the order before encoding — throws TypeGuardError if invalid
+const buffer: Uint8Array = typia.protobuf.assertEncode<IOrder>(order);
+
+// buffer is ready to send over gRPC, WebSocket, message queue, etc.
+console.log("Encoded bytes:", buffer.byteLength);
+
+// --- Receiver side ---
+
+// assertDecode checks custom tag constraints after decoding
+const decoded: IOrder = typia.protobuf.assertDecode<IOrder>(buffer);
+
+console.log("Order ID:", decoded.orderId);
+console.log("Item count:", decoded.items.length);
+
+// --- Schema export (share with non-TypeScript services) ---
+
+const protoSchema: string = typia.protobuf.message<IOrder>();
+console.log(protoSchema);
+// syntax = "proto3";
+//
+// message IOrder {
+//   required string orderId = 1;
+//   required uint32 customerId = 2;
+//   repeated IOrderItem items = 3;
+//   required int64 totalCents = 4;
+// }
+//
+// message IOrderItem {
+//   required string productId = 1;
+//   required uint32 quantity = 2;
+//   required int64 priceCents = 3;
+// }
+```
+
+<Note>
+`assertDecode` only validates custom tag constraints (like `Format<"uuid">` or `Minimum<0>`), not structural type correctness. If the binary was produced by `assertEncode<IOrder>`, structural correctness is already guaranteed by the sender. If you receive binary from an untrusted external source, consider additional application-level checks.
+</Note>
+
+---
+
+## Summary
+
+<CardGroup cols={2}>
+  <Card title="Protocol Buffer overview" icon="file-code" href="/protobuf/overview">
+    Understand supported types, restrictions, and when to use Protocol Buffers vs JSON.
+  </Card>
+  <Card title="Runtime validators" icon="shield-check" href="/validators/overview">
+    Learn about `assert`, `is`, and `validate` — the same patterns used inside the protobuf functions.
+  </Card>
+</CardGroup>

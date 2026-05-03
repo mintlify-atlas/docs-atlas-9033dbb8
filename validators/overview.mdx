@@ -1,0 +1,94 @@
+---
+title: "Runtime Validators Overview: Typia Validation Functions"
+description: "Survey typia's eight validators — is, assert, validate, and strict variants — with a comparison table and guidance on choosing the right function."
+---
+
+Typia generates runtime type validation code by reading your TypeScript type definitions at compile time. Instead of writing manual validation logic or maintaining separate schema files, you annotate types once and typia produces validators that are up to **20,000x faster** than class-validator — because the generated code is plain JavaScript with no reflection overhead.
+
+This page gives an overview of all validator functions, compares their behavior, and points you to the detailed pages for each group.
+
+## The eight validator functions
+
+Typia provides two axes of variation: **behavior on invalid input** (throw, return boolean, or collect all errors) and **strictness** (allow extra properties or reject them).
+
+| Function | Return type | Throws | Strict mode | Use when |
+|---|---|---|---|---|
+| `typia.is<T>(input)` | `input is T` | Never | No | Simple boolean check; type narrowing in conditionals |
+| `typia.equals<T>(input)` | `input is T` | Never | Yes | Boolean check that also rejects extra properties |
+| `typia.assert<T>(input)` | `T` | First error | No | Fail fast; want the validated value returned |
+| `typia.assertEquals<T>(input)` | `T` | First error | Yes | Fail fast; reject superfluous properties too |
+| `typia.assertGuard<T>(input)` | `asserts input is T` | First error | No | Narrow type in-place without needing the return value |
+| `typia.assertGuardEquals<T>(input)` | `asserts input is T` | First error | Yes | Strict in-place narrowing |
+| `typia.validate<T>(input)` | `IValidation<T>` | Never | No | Collect all errors; show validation feedback to users |
+| `typia.validateEquals<T>(input)` | `IValidation<T>` | Never | Yes | Collect all errors including extra property violations |
+
+### Standard vs. strict mode
+
+Every validator has a "standard" variant and a "strict equality" variant (the `equals`/`Equals` suffix). Standard validators accept inputs that conform to `T` even if they contain additional properties not declared in `T`. Strict variants reject any extra property — the `expected` field in the error will be `"undefined"` for those properties.
+
+Use strict mode when you need to guard against typos in property names, when deserializing from untrusted sources that should exactly match a schema, or when building APIs that need to reject unknown fields.
+
+## Choosing the right function
+
+```
+Do you need all errors collected?
+├─ Yes → validate / validateEquals
+└─ No
+   ├─ Do you need the return value typed as T?
+   │  ├─ Yes → assert / assertEquals
+   │  └─ No  → assertGuard / assertGuardEquals
+   └─ Is a simple true/false enough?
+      └─ Yes → is / equals
+```
+
+<Note>
+  All assert-family functions throw `TypeGuardError` on the **first** mismatch encountered. If you need to surface all validation errors (e.g. for a form submission response), use `validate` or `validateEquals` instead.
+</Note>
+
+## Performance
+
+Typia's validators are generated at compile time as specialized, inlined JavaScript — no schema interpretation at runtime, no `reflect-metadata` scanning, no class instantiation. Benchmarks show:
+
+- **~20,000x faster** than class-validator
+- **~100x faster** than zod
+- Comparable performance to hand-written validation code
+
+This is possible because typia reads type metadata during the TypeScript compilation step (via a compiler transformer) and emits a dedicated validation function for each type, with all property checks fully unrolled.
+
+## Factory functions
+
+Every validator has a corresponding `create*` factory that returns a reusable function:
+
+| Factory | Returns |
+|---|---|
+| `createIs<T>()` | `(input: unknown) => input is T` |
+| `createEquals<T>()` | `(input: unknown) => input is T` |
+| `createAssert<T>()` | `(input: unknown) => T` |
+| `createAssertEquals<T>()` | `(input: unknown) => T` |
+| `createAssertGuard<T>()` | `(input: unknown) => asserts input is T` |
+| `createAssertGuardEquals<T>()` | `(input: unknown) => asserts input is T` |
+| `createValidate<T>()` | `(input: unknown) => IValidation<T>` |
+| `createValidateEquals<T>()` | `(input: unknown) => IValidation<T>` |
+
+Factories are useful when you want to create a validator once and reuse it across many call sites — for example, as a middleware parameter or stored on a class.
+
+<Note>
+  `createValidate<T>()` and `createValidateEquals<T>()` also implement the `StandardSchemaV1` interface, making them compatible with any library that accepts Standard Schema validators.
+</Note>
+
+## Explore each function group
+
+<CardGroup cols={2}>
+  <Card title="assert" href="/validators/assert">
+    Throws TypeGuardError on the first invalid property. Includes assertEquals, assertGuard, and assertGuardEquals variants.
+  </Card>
+  <Card title="is" href="/validators/is">
+    Returns a boolean type predicate. Narrow your TypeScript types safely inside if/else branches. Includes the equals variant.
+  </Card>
+  <Card title="validate" href="/validators/validate">
+    Collects every validation error into an IValidation result object. Never throws. Includes validateEquals and StandardSchemaV1 support.
+  </Card>
+  <Card title="Type Tags" href="/validators/tags">
+    Attach constraints like MinLength, Minimum, Format, and Pattern directly to your TypeScript types using intersection syntax.
+  </Card>
+</CardGroup>

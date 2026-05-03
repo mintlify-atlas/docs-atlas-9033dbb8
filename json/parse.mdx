@@ -1,0 +1,346 @@
+---
+title: "Type-Safe JSON Parse with Runtime Validation"
+description: "Parse JSON strings into validated TypeScript types with typia.json.assertParse, isParse, and validateParse — JSON.parse and type checking in one step."
+---
+
+Typia's JSON parse functions combine `JSON.parse()` with runtime type validation in a single compile-time-optimized operation. This page covers all four parse variants, factory functions for reuse, how they differ from calling `JSON.parse()` and then validating separately, and error handling patterns.
+
+## How parse differs from `JSON.parse` + validate
+
+Calling `JSON.parse()` and then `typia.assert<T>()` separately is two passes over the data: one to deserialize the JSON, and one to walk the resulting object for type errors. Typia's parse functions generate code that validates types during deserialization — the parsed object is checked as it's built.
+
+Beyond the performance benefit, this means you get a `Primitive<T>` result: class instances are unwrapped to plain objects, `Date` objects become strings, and only JSON-representable values survive. The return type accurately reflects what JSON can express.
+
+<Note>
+  All parse functions require Typia's compiler transformer. See [Setup](/setup) to configure your build tool.
+</Note>
+
+## `typia.json.assertParse<T>(input, errorFactory?)`
+
+Parses a JSON string and throws `TypeGuardError` if the parsed value does not match type `T`.
+
+```typescript
+function assertParse<T>(
+  input: string,
+  errorFactory?: (props: TypeGuardError.IProps) => Error,
+): Primitive<T>;
+```
+
+<ParamField path="input" type="string" required>
+  The JSON string to parse and validate.
+</ParamField>
+
+<ParamField path="errorFactory" type="(props: TypeGuardError.IProps) => Error">
+  Optional factory to produce a custom error. Receives `TypeGuardError.IProps` with `path`, `expected`, and `value`. When omitted, a `TypeGuardError` is thrown.
+</ParamField>
+
+**Returns** `Primitive<T>` — the parsed and type-validated value. `Primitive<T>` unwraps class instances to plain objects and converts non-JSON-serializable values (e.g. `Date`) to their serialized form.
+
+**Throws** `TypeGuardError` (or your custom error) on the first type mismatch after parsing.
+
+### Example
+
+<Tabs>
+  <Tab title="Valid JSON">
+    ```typescript
+    import typia from "typia";
+
+    interface IUser {
+      id: number;
+      name: string;
+      email: string;
+    }
+
+    const json = '{"id":1,"name":"Alice","email":"alice@example.com"}';
+    const user = typia.json.assertParse<IUser>(json);
+    // user is typed as Primitive<IUser> — same shape here
+    console.log(user.name); // "Alice"
+    ```
+  </Tab>
+  <Tab title="Invalid JSON structure">
+    ```typescript
+    import typia from "typia";
+
+    interface IUser {
+      id: number;
+      name: string;
+      email: string;
+    }
+
+    // id should be a number — throws TypeGuardError
+    try {
+      const user = typia.json.assertParse<IUser>(
+        '{"id":"not-a-number","name":"Alice","email":"alice@example.com"}'
+      );
+    } catch (err) {
+      // TypeGuardError: $input.id is "not-a-number", expected number
+    }
+    ```
+  </Tab>
+  <Tab title="Custom error">
+    ```typescript
+    import typia from "typia";
+
+    const user = typia.json.assertParse<IUser>(
+      json,
+      (props) => new BadRequestError(
+        `Invalid request body at ${props.path}: expected ${props.expected}`
+      ),
+    );
+    ```
+  </Tab>
+</Tabs>
+
+## `typia.json.isParse<T>(input)`
+
+Parses a JSON string and returns `null` if the parsed value does not match type `T`. No exception is thrown.
+
+```typescript
+function isParse<T>(input: string): Primitive<T> | null;
+```
+
+<ParamField path="input" type="string" required>
+  The JSON string to parse and type-check.
+</ParamField>
+
+**Returns** `Primitive<T>` if the parsed value matches `T`, or `null` on any type mismatch.
+
+### Example
+
+```typescript
+import typia from "typia";
+
+interface IConfig {
+  host: string;
+  port: number;
+  debug?: boolean;
+}
+
+const raw = fs.readFileSync("config.json", "utf8");
+const config = typia.json.isParse<IConfig>(raw);
+
+if (config === null) {
+  console.error("config.json does not match IConfig — using defaults");
+  useDefaultConfig();
+} else {
+  startServer(config);
+}
+```
+
+## `typia.json.validateParse<T>(input)`
+
+Parses a JSON string and returns all type errors found — not just the first. Returns an `IValidation` discriminated union.
+
+```typescript
+function validateParse<T>(input: string): IValidation<Primitive<T>>;
+```
+
+<ParamField path="input" type="string" required>
+  The JSON string to parse and validate.
+</ParamField>
+
+**Returns** `IValidation<Primitive<T>>`:
+- On success: `{ success: true, data: Primitive<T> }`
+- On failure: `{ success: false, data: unknown, errors: IValidation.IError[] }`
+
+Each `IValidation.IError` contains:
+- `path`: dot-notation path from `$input` to the failing property
+- `expected`: human-readable description of the expected type
+- `value`: the actual value at that path
+
+### Example
+
+```typescript
+import typia from "typia";
+
+interface IRegistration {
+  username: string;
+  password: string;
+  age: number;
+  acceptedTerms: true;
+}
+
+function handleRegistration(body: string): Response {
+  const result = typia.json.validateParse<IRegistration>(body);
+
+  if (!result.success) {
+    const fieldErrors = result.errors.map((e) => ({
+      field: e.path.replace("$input.", ""),
+      message: `Expected ${e.expected}`,
+    }));
+    return Response.json({ errors: fieldErrors }, { status: 400 });
+  }
+
+  return createUser(result.data);
+}
+```
+
+## Choosing the right variant
+
+<Tabs>
+  <Tab title="When to use each">
+    | Scenario | Recommended function |
+    |---|---|
+    | API endpoint — bad input is a programming error | `assertParse` |
+    | Optional parsing — null signals missing/invalid | `isParse` |
+    | User-facing form validation — show all errors | `validateParse` |
+    | No validation needed (trusted internal data) | Use `JSON.parse` directly |
+  </Tab>
+  <Tab title="Comparison">
+    ```typescript
+    import typia from "typia";
+
+    // Throws TypeGuardError on first mismatch
+    typia.json.assertParse<T>(json);
+
+    // Returns null on mismatch
+    typia.json.isParse<T>(json);
+
+    // Returns all errors as an array
+    typia.json.validateParse<T>(json);
+    ```
+  </Tab>
+</Tabs>
+
+## Error handling patterns
+
+<CodeGroup>
+
+```typescript Express middleware
+import typia from "typia";
+
+function parseBody<T>(json: string, res: Response): Primitive<T> | null {
+  const result = typia.json.validateParse<T>(json);
+
+  if (!result.success) {
+    res.status(400).json({
+      message: "Invalid request body",
+      errors: result.errors.map((e) => ({
+        path: e.path,
+        expected: e.expected,
+        received: e.value,
+      })),
+    });
+    return null;
+  }
+
+  return result.data;
+}
+```
+
+```typescript NestJS pipe
+import { PipeTransform, BadRequestException } from "@nestjs/common";
+import typia from "typia";
+
+export class ParseUserPipe implements PipeTransform {
+  transform(value: string) {
+    try {
+      return typia.json.assertParse<IUser>(value);
+    } catch (err) {
+      throw new BadRequestException(err.message);
+    }
+  }
+}
+```
+
+```typescript Retry with fallback
+import typia from "typia";
+
+function loadSettings(json: string): ISettings {
+  const parsed = typia.json.isParse<ISettings>(json);
+  if (parsed !== null) return parsed;
+
+  console.warn("Settings file invalid — loading defaults");
+  return defaultSettings;
+}
+```
+
+</CodeGroup>
+
+## Factory functions
+
+Factory functions create a reusable parser for a single type. Call the factory once at module initialization and reuse the returned function, which avoids repeated compile-time code emission overhead in hot paths.
+
+```typescript
+// Create once
+const assertParseUser = typia.json.createAssertParse<IUser>();
+const isParseUser = typia.json.createIsParse<IUser>();
+const validateParseUser = typia.json.createValidateParse<IUser>();
+
+// Reuse many times
+const user1 = assertParseUser(json1);
+const user2 = assertParseUser(json2);
+```
+
+### All factory signatures
+
+```typescript
+// Throws on mismatch
+function createAssertParse<T>(
+  errorFactory?: (props: TypeGuardError.IProps) => Error,
+): (input: string) => Primitive<T>;
+
+// Returns null on mismatch
+function createIsParse<T>(): (input: string) => Primitive<T> | null;
+
+// Returns all errors
+function createValidateParse<T>(): (input: string) => IValidation<Primitive<T>>;
+```
+
+### Example
+
+```typescript
+import typia from "typia";
+
+interface IWebhookPayload {
+  event: "created" | "updated" | "deleted";
+  resourceId: string;
+  timestamp: number;
+}
+
+// Built once at startup
+const parseWebhook = typia.json.createAssertParse<IWebhookPayload>();
+
+// Used on every incoming request
+app.post("/webhook", (req, res) => {
+  try {
+    const payload = parseWebhook(req.body);
+    processWebhook(payload);
+    res.status(200).end();
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+```
+
+<Tip>
+  Factory functions work well as injectable dependencies. You can create them at module level or in a DI container, and pass them into services that should not import `typia` directly.
+</Tip>
+
+## `Primitive<T>` return type
+
+All parse functions return `Primitive<T>` rather than `T`. This type strips away any non-JSON-representable aspects of `T`:
+
+- Class instances become plain objects
+- `Date` values become `string` (ISO format from JSON)
+- `undefined` properties are absent
+- Methods and symbols are removed
+
+This accurately models what survives a round-trip through JSON serialization and is the correct type for data that arrived as a JSON string.
+
+```typescript
+import typia, { Primitive } from "typia";
+
+class UserModel {
+  constructor(
+    public id: number,
+    public name: string,
+  ) {}
+  greet() { return `Hello, ${this.name}`; }
+}
+
+// Primitive<UserModel> is { id: number; name: string }
+// The greet() method does not exist in the parsed result
+const user = typia.json.assertParse<UserModel>(json);
+// user.greet is undefined at runtime — Primitive<T> reflects this correctly
+```

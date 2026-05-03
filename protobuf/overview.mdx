@@ -1,0 +1,158 @@
+---
+title: "Typia Protocol Buffer Support: Overview and Restrictions"
+description: "Typia generates .proto message definitions and binary encode/decode functions directly from TypeScript types, with no separate schema files required."
+keywords: ["protobuf", "protocol buffer", "proto3", "typia", "typescript", "schema", "message"]
+---
+
+Typia's Protocol Buffer support lets you encode and decode binary data using Google's Protocol Buffers format entirely from TypeScript types. Instead of maintaining separate `.proto` files, Typia analyzes your TypeScript interfaces at compile time and generates both the `.proto` message definition and the corresponding binary codec functions automatically.
+
+## How it works
+
+When you call `typia.protobuf.message<T>()`, `typia.protobuf.encode<T>()`, or `typia.protobuf.decode<T>()`, Typia's TypeScript transformer inspects the generic type argument `T` at compile time and generates the appropriate runtime code. There is no reflection at runtime — the codec is fully pre-built.
+
+The `typia.protobuf.message<T>()` function produces a `proto3` schema string that you can share with services written in other languages:
+
+```typescript
+import typia from "typia";
+
+interface IPoint {
+  x: number;
+  y: number;
+  label: string;
+}
+
+const schema: string = typia.protobuf.message<IPoint>();
+console.log(schema);
+```
+
+The output is a valid `proto3` definition:
+
+```protobuf
+syntax = "proto3";
+
+message IPoint {
+  required double x = 1;
+  required double y = 2;
+  required string label = 3;
+}
+```
+
+Field numbers are assigned automatically in property declaration order, starting from `1`. You can override them with the `tags.Sequence` tag (see [type restrictions](#type-restrictions) below).
+
+## Supported TypeScript types
+
+Protocol Buffers have a significantly more limited type system than TypeScript. Typia maps TypeScript primitives to proto3 scalar types as follows:
+
+| TypeScript type | Proto3 type | Notes |
+|---|---|---|
+| `boolean` | `bool` | — |
+| `number` | `double` | default; override with `tags.Type` |
+| `number` & `tags.Type<"int32">` | `int32` | — |
+| `number` & `tags.Type<"uint32">` | `uint32` | — |
+| `number` & `tags.Type<"int64">` | `int64` | — |
+| `number` & `tags.Type<"uint64">` | `uint64` | — |
+| `number` & `tags.Type<"float">` | `float` | — |
+| `bigint` | `int64` | default |
+| `bigint` & `tags.Type<"uint64">` | `uint64` | — |
+| `string` | `string` | — |
+| `Uint8Array` | `bytes` | — |
+| `T[]` | `repeated T` | one-dimensional only |
+| `Map<K, V>` | `map<K, V>` | scalar keys only |
+| interface / object | `message` | static properties only |
+
+<Note>
+By default `number` maps to `double`. To use a more compact integer encoding, annotate with `tags.Type<"int32">`, `tags.Type<"uint32">`, etc.
+</Note>
+
+## Type restrictions
+
+Protocol Buffers are structurally less expressive than TypeScript. Typia enforces these restrictions at compile time — violations produce TypeScript compilation errors, not runtime errors.
+
+### What is supported
+
+- Primitive scalars: `boolean`, `number`, `bigint`, `string`, `Uint8Array`
+- Interfaces and object types with static (literal-key) properties
+- One-dimensional arrays: `T[]` or `Array<T>`
+- `Map<K, V>` where the key is a scalar (boolean, number, or string)
+- Nested message types (objects referencing other interfaces)
+- Optional properties (`prop?: T`) where `T` is a scalar or object
+
+### What is not supported
+
+The following TypeScript constructs cause a **compilation error** when used with any `typia.protobuf.*` function:
+
+<Warning>
+Attempting to use unsupported types causes a TypeScript compile-time error. Fix the type definition before building.
+</Warning>
+
+| Unsupported construct | Reason |
+|---|---|
+| Union types (e.g., `string \| number`) at the top level or inside arrays/maps | Proto3 has no native union; use `oneof` manually or restructure |
+| Multi-dimensional arrays (`T[][]`) | Proto3 only supports single-level `repeated` |
+| `Set<T>` | No proto3 equivalent |
+| `tuple` types | No proto3 equivalent |
+| `any` type | Cannot generate a schema |
+| Functions | Cannot encode |
+| `Date`, `Buffer`, typed arrays other than `Uint8Array` | Use `string` or `Uint8Array` instead |
+| Empty object types | Every proto3 message must have at least one field |
+| Mixed static + dynamic keys in one object | Proto3 messages are either static or map types |
+| Multiple dynamic-key properties in one object | Only one dynamic key per message |
+| Union in array element type | Each `repeated` field has exactly one type |
+| Union in map value type | Each `map` value field has exactly one type |
+| Optional elements inside arrays | `repeated` fields cannot be optional |
+| `WeakSet`, `WeakMap` | Use `Array` or `Map` instead |
+
+### Union types and `oneof`
+
+When a property can hold more than one scalar type at the same time — for example `number | string` — Typia emits a proto3 `oneof` block. This is valid only when Typia can assign a distinct field number to each variant. Use `tags.Sequence` to assign explicit field numbers in ambiguous cases:
+
+```typescript
+import typia, { tags } from "typia";
+
+interface IValue {
+  // Typia emits: oneof payload { int32 v1 = 1; string v2 = 2; }
+  payload:
+    | (number & tags.Type<"int32"> & tags.Sequence<1>)
+    | (string & tags.Sequence<2>);
+}
+```
+
+### Controlling field numbers with `tags.Sequence`
+
+By default, Typia assigns field numbers automatically. To pin a field to a specific proto3 field number (for wire-format stability across schema versions), use `tags.Sequence`:
+
+```typescript
+import typia, { tags } from "typia";
+
+interface IUser {
+  id: number & tags.Type<"uint32"> & tags.Sequence<1>;
+  name: string & tags.Sequence<2>;
+  email: string & tags.Sequence<3>;
+}
+```
+
+## When to use Protocol Buffers vs JSON
+
+| Concern | Protocol Buffers | JSON |
+|---|---|---|
+| Payload size | Smaller — binary format | Larger — text format |
+| Parsing speed | Faster | Slower |
+| Human-readability | Not human-readable | Human-readable |
+| Schema required | Yes — type must be known at both ends | No — self-describing |
+| Language interoperability | Good — share `.proto` files | Excellent — universal |
+| TypeScript union types | Limited | Full support |
+| Debugging ease | Harder | Easier |
+
+Protocol Buffers are a good fit for high-throughput internal microservice communication where payload size and parse latency matter and both sides share the TypeScript (or generated) schema. For public APIs, browser communication, or any context where human-readability or schema flexibility is important, prefer JSON.
+
+<Tip>
+You can call `typia.protobuf.message<T>()` to export the `.proto` definition and share it with non-TypeScript services written in Go, Python, Rust, etc.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={1}>
+  <Card title="Encode and decode" icon="arrows-left-right" href="/protobuf/encode-decode">
+    Learn all encode and decode functions — plain, assert, is, validate — and factory variants for reuse.
+  </Card>
+</CardGroup>

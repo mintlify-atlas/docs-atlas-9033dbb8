@@ -1,0 +1,244 @@
+---
+title: "Typia with Vercel AI SDK — Type-Safe Tool Calling"
+description: "Convert Typia controllers into Vercel AI SDK tools with automatic validation. Supports OpenAI, Anthropic, Google, and every other Vercel AI SDK provider."
+---
+
+`@typia/vercel` integrates Typia with the [Vercel AI SDK](https://sdk.vercel.ai/), converting TypeScript class methods and OpenAPI operations into Vercel-compatible tool definitions with automatic argument validation. When an LLM provides malformed arguments, the validation error is returned in a structured format that the model can use to correct its next attempt automatically.
+
+The package exports two functions: `toVercelTools` for tool-calling workflows and `toVercelSchema` for structured output generation with `generateObject`.
+
+## Installation
+
+```bash
+npm install @typia/vercel ai
+npm install typia
+npx typia setup
+```
+
+<Note>
+`@typia/vercel` requires `ai` >= 6.0.0 as a peer dependency.
+</Note>
+
+## Tool calling from a TypeScript class
+
+Define a class whose methods represent the tools you want the LLM to call. Typia reads the method signatures at compile time and generates validators for each method's input type:
+
+```typescript
+import { openai } from "@ai-sdk/openai";
+import { toVercelTools } from "@typia/vercel";
+import { generateText, GenerateTextResult, Tool } from "ai";
+import typia from "typia";
+
+class Calculator {
+  /** Add two numbers together. */
+  add(props: { a: number; b: number }): { value: number } {
+    return { value: props.a + props.b };
+  }
+
+  /** Multiply two numbers. */
+  multiply(props: { a: number; b: number }): { value: number } {
+    return { value: props.a * props.b };
+  }
+}
+
+const tools: Record<string, Tool> = toVercelTools({
+  controllers: [
+    typia.llm.controller<Calculator>("Calculator", new Calculator()),
+  ],
+});
+
+const result: GenerateTextResult<any, any> = await generateText({
+  model: openai("gpt-4o"),
+  prompt: "What is 10 + 5?",
+  tools,
+});
+```
+
+## Tool calling from an OpenAPI document
+
+You can also convert an existing OpenAPI/Swagger document into Vercel tools using `HttpLlm.controller` from `@typia/utils`:
+
+```typescript
+import { openai } from "@ai-sdk/openai";
+import { HttpLlm } from "@typia/utils";
+import { toVercelTools } from "@typia/vercel";
+import { generateText, Tool } from "ai";
+
+const tools: Record<string, Tool> = toVercelTools({
+  controllers: [
+    HttpLlm.controller({
+      name: "petStore",
+      document: yourOpenApiDocument,
+      connection: { host: "https://api.example.com" },
+    }),
+  ],
+});
+
+const result = await generateText({
+  model: openai("gpt-4o"),
+  tools,
+  prompt: "Search for all available pets",
+});
+```
+
+## Multiple providers
+
+`toVercelTools` returns a standard `Record<string, Tool>` that works with any Vercel AI SDK provider:
+
+<CodeGroup>
+  ```typescript OpenAI
+  import { openai } from "@ai-sdk/openai";
+  import { generateText } from "ai";
+
+  const result = await generateText({
+    model: openai("gpt-4o"),
+    tools: toVercelTools({ controllers: [controller] }),
+    prompt: "Calculate 100 * 50",
+  });
+  ```
+
+  ```typescript Anthropic
+  import { anthropic } from "@ai-sdk/anthropic";
+  import { generateText } from "ai";
+
+  const result = await generateText({
+    model: anthropic("claude-sonnet-4-20250514"),
+    tools: toVercelTools({ controllers: [controller] }),
+    prompt: "Calculate 100 * 50",
+  });
+  ```
+
+  ```typescript Google
+  import { google } from "@ai-sdk/google";
+  import { generateText } from "ai";
+
+  const result = await generateText({
+    model: google("gemini-2.0-flash"),
+    tools: toVercelTools({ controllers: [controller] }),
+    prompt: "Calculate 100 * 50",
+  });
+  ```
+</CodeGroup>
+
+## Structured output with generateObject
+
+Use `toVercelSchema` with Vercel's `generateObject` to extract structured data from unstructured text. Combine it with `typia.llm.parameters<T>()` to produce the schema and with `typia.validate<T>()` to verify the result:
+
+```typescript
+import { openai } from "@ai-sdk/openai";
+import { toVercelSchema } from "@typia/vercel";
+import { dedent, LlmJson } from "@typia/utils";
+import { generateObject } from "ai";
+import typia, { tags } from "typia";
+
+interface IMember {
+  email: string & tags.Format<"email">;
+  name: string;
+  age: number & tags.Minimum<0> & tags.Maximum<100>;
+  hobbies: string[];
+  joined_at: string & tags.Format<"date">;
+}
+
+const { object } = await generateObject({
+  model: openai("gpt-4o"),
+  schema: toVercelSchema(typia.llm.parameters<IMember>()),
+  prompt: dedent`
+    I am a new member of the community.
+
+    My name is John Doe, and I am 25 years old.
+    I like playing basketball and reading books,
+    and joined to this community at 2022-01-01.
+  `,
+});
+
+// Validate the extracted object
+const result = typia.validate<IMember>(object);
+if (!result.success) {
+  console.error(LlmJson.stringify(result));
+}
+```
+
+Alternatively, use `typia.llm.structuredOutput<T>()` which provides both the parameters schema and a `coerce`/`validate` pair:
+
+```typescript
+import { openai } from "@ai-sdk/openai";
+import { toVercelSchema } from "@typia/vercel";
+import { generateObject } from "ai";
+import typia from "typia";
+
+interface IMember {
+  name: string;
+  age: number;
+}
+
+const output = typia.llm.structuredOutput<IMember>();
+
+const { object } = await generateObject({
+  model: openai("gpt-4o"),
+  schema: toVercelSchema(output.parameters),
+  prompt: "Generate a member named John who is 30 years old",
+});
+
+const coerced = output.coerce(object);
+const result = output.validate(coerced);
+```
+
+## API reference
+
+### `toVercelTools(props)`
+
+Converts one or more controllers into a `Record<string, Tool>` for use with Vercel AI SDK.
+
+```typescript
+function toVercelTools(props: {
+  /**
+   * Controllers to convert. Each controller contributes one tool per method
+   * (class controller) or one tool per operation (HTTP controller).
+   */
+  controllers: Array<ILlmController | IHttpLlmController>;
+
+  /**
+   * If true, tool names are prefixed with the controller name:
+   * "{controller}_{function}". Useful when multiple controllers have
+   * methods with the same name.
+   * @default false
+   */
+  prefix?: boolean;
+}): Record<string, Tool>;
+```
+
+### `toVercelSchema(parameters)`
+
+Converts an `ILlmSchema.IParameters` object into a Vercel AI SDK `Schema` for use with `generateObject`.
+
+```typescript
+function toVercelSchema(
+  parameters: ILlmSchema.IParameters,
+): Schema<object>;
+```
+
+## Validation error format
+
+When the LLM provides arguments that fail validation, `toVercelTools` returns a structured error string in the tool result so the model can correct its next turn:
+
+```json
+{
+  "success": false,
+  "error": "Type errors in \"add\" arguments:\n\n```json\n{\"name\":\"age\",\"expected\":\"number\",\"value\":\"twenty\"}\n```"
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="LLM Overview" href="/llm/overview">
+    Learn about typia.llm.controller and LLM function calling
+  </Card>
+  <Card title="Structured Output" href="/llm/structured-output">
+    Generate structured data from LLM responses
+  </Card>
+  <Card title="@typia/langchain" href="/integrations/langchain">
+    Use Typia tools with LangChain agents
+  </Card>
+  <Card title="@typia/mcp" href="/integrations/mcp">
+    Register Typia tools as MCP server tools
+  </Card>
+</CardGroup>

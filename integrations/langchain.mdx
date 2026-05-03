@@ -1,0 +1,203 @@
+---
+title: "Typia with LangChain — Type-Safe Tool Definitions"
+description: "Convert Typia controllers into LangChain tools. Validation errors are returned in a structured format so agents can self-correct invalid tool arguments."
+---
+
+`@typia/langchain` integrates Typia with [LangChain.js](https://js.langchain.com/), converting TypeScript class methods and OpenAPI operations into `DynamicStructuredTool[]` instances that LangChain agents can call. When an LLM provides invalid arguments, the validation error is thrown as a `ToolInputParsingException` in a structured format that the agent can use to automatically correct its next attempt.
+
+## Installation
+
+```bash
+npm install @typia/langchain @langchain/core
+npm install typia
+npx typia setup
+```
+
+<Note>
+`@typia/langchain` requires `@langchain/core` >= 1.0.0 as a peer dependency.
+</Note>
+
+## Tool calling from a TypeScript class
+
+Define a class whose methods represent the tools you want the LLM to call. Every public method becomes one `DynamicStructuredTool`. JSDoc comments on methods and parameters are included in the tool description:
+
+```typescript
+import { ChainValues, Runnable } from "@langchain/core";
+import { ChatPromptTemplate } from "@langchain/core/prompts";
+import { DynamicStructuredTool } from "@langchain/core/tools";
+import { ChatOpenAI } from "@langchain/openai";
+import { toLangChainTools } from "@typia/langchain";
+import { AgentExecutor, createToolCallingAgent } from "langchain/agents";
+import typia from "typia";
+
+class Calculator {
+  /** Add two numbers together. */
+  add(input: { a: number; b: number }): { value: number } {
+    return { value: input.a + input.b };
+  }
+
+  /** Multiply two numbers. */
+  multiply(input: { a: number; b: number }): { value: number } {
+    return { value: input.a * input.b };
+  }
+}
+
+const tools: DynamicStructuredTool[] = toLangChainTools({
+  controllers: [
+    typia.llm.controller<Calculator>("calculator", new Calculator()),
+  ],
+});
+
+const agent: Runnable = createToolCallingAgent({
+  llm: new ChatOpenAI({ model: "gpt-4o" }),
+  tools,
+  prompt: ChatPromptTemplate.fromMessages([
+    ["system", "You are a helpful assistant."],
+    ["human", "{input}"],
+    ["placeholder", "{agent_scratchpad}"],
+  ]),
+});
+
+const executor: AgentExecutor = new AgentExecutor({ agent, tools });
+const result: ChainValues = await executor.invoke({ input: "What is 10 + 5?" });
+```
+
+## Tool calling from an OpenAPI document
+
+You can convert an existing OpenAPI/Swagger document into LangChain tools using `HttpLlm.controller` from `@typia/utils`:
+
+```typescript
+import { DynamicStructuredTool } from "@langchain/core/tools";
+import { HttpLlm } from "@typia/utils";
+import { toLangChainTools } from "@typia/langchain";
+
+const tools: DynamicStructuredTool[] = toLangChainTools({
+  controllers: [
+    HttpLlm.controller({
+      name: "petStore",
+      document: yourOpenApiDocument,
+      connection: { host: "https://api.example.com" },
+    }),
+  ],
+});
+```
+
+## Structured output with withStructuredOutput
+
+Use `typia.llm.parameters<T>()` with LangChain's `.withStructuredOutput()` to extract structured objects from unstructured text:
+
+```typescript
+import { ChatOpenAI } from "@langchain/openai";
+import { dedent, LlmJson } from "@typia/utils";
+import typia, { tags } from "typia";
+
+interface IMember {
+  email: string & tags.Format<"email">;
+  name: string;
+  age: number & tags.Minimum<0> & tags.Maximum<100>;
+  hobbies: string[];
+  joined_at: string & tags.Format<"date">;
+}
+
+const model = new ChatOpenAI({ model: "gpt-4o" }).withStructuredOutput(
+  typia.llm.parameters<IMember>(),
+);
+
+const member: IMember = await model.invoke(dedent`
+  I am a new member of the community.
+
+  My name is John Doe, and I am 25 years old.
+  I like playing basketball and reading books,
+  and joined to this community at 2022-01-01.
+`);
+
+// Validate the result
+const result = typia.validate<IMember>(member);
+if (!result.success) {
+  console.error(LlmJson.stringify(result));
+}
+```
+
+## Using bindTools directly
+
+For simple use cases that don't require a full agent executor, bind tools directly to the model:
+
+```typescript
+import { initChatModel } from "langchain/chat_models/universal";
+import typia from "typia";
+import { toLangChainTools } from "@typia/langchain";
+
+class Calculator {
+  /** Add two numbers. */
+  add(input: { a: number; b: number }): { value: number } {
+    return { value: input.a + input.b };
+  }
+}
+
+const tools = toLangChainTools({
+  controllers: [
+    typia.llm.controller<Calculator>("calculator", new Calculator()),
+  ],
+});
+
+const llm = await initChatModel("gpt-4o");
+const modelWithTools = llm.bindTools(tools);
+const result = await modelWithTools.invoke("What is 10 + 5?");
+```
+
+## API reference
+
+### `toLangChainTools(props)`
+
+Converts one or more controllers into a `DynamicStructuredTool[]`.
+
+```typescript
+function toLangChainTools(props: {
+  /**
+   * Controllers to convert. Each controller contributes one tool per method
+   * (class controller) or one tool per operation (HTTP controller).
+   */
+  controllers: Array<ILlmController | IHttpLlmController>;
+
+  /**
+   * If true, tool names are prefixed with the controller name:
+   * "{controllerName}_{methodName}". Useful when multiple controllers
+   * have methods with the same name.
+   * @default false
+   */
+  prefix?: boolean;
+}): DynamicStructuredTool[];
+```
+
+## Validation error format
+
+When the LLM provides arguments that fail validation, `toLangChainTools` throws a `ToolInputParsingException` with a structured message that LangChain includes in the agent's scratchpad:
+
+```
+ToolInputParsingException: Type errors in "add" arguments:
+
+```json
+{"name":"a","expected":"number","value":"ten"}
+```
+```
+
+The agent sees this error and can correct the argument in the next tool call attempt.
+
+<Note>
+Typia also calls `LlmJson.coerce` before validation, which attempts to coerce string numbers (`"42"`) and other common LLM output quirks into the expected types before failing with an error.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="LLM Overview" href="/llm/overview">
+    Learn about typia.llm.controller and LLM function calling
+  </Card>
+  <Card title="Structured Output" href="/llm/structured-output">
+    Generate structured data from LLM responses
+  </Card>
+  <Card title="@typia/vercel" href="/integrations/vercel-ai">
+    Use Typia tools with the Vercel AI SDK
+  </Card>
+  <Card title="@typia/mcp" href="/integrations/mcp">
+    Register Typia tools as MCP server tools
+  </Card>
+</CardGroup>

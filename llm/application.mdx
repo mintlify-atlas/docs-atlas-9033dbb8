@@ -1,0 +1,339 @@
+---
+title: "Function Calling with application() and controller()"
+description: "Convert TypeScript classes into LLM function schemas with application() and controller(). ILlmFunction bundles validate for type-safe AI argument execution."
+---
+
+Typia's `typia.llm.application<Class>()` and `typia.llm.controller<Class>()` functions convert TypeScript class methods into the JSON Schema structures that LLM providers need for function calling. Every generated schema bundles a `validate` function so you can check LLM-produced arguments before executing anything — and feed structured error feedback back to the model when it gets something wrong.
+
+## `typia.llm.application<Class>()`
+
+```typescript
+import typia from "typia";
+import typia, { ILlmApplication } from "typia";
+
+const app: ILlmApplication<ShoppingService> =
+  typia.llm.application<ShoppingService>();
+```
+
+`application()` is a **compile-time transformer**. Typia reads the class type at build time and emits a JSON Schema object for every public method. You receive an `ILlmApplication` that contains:
+
+- `functions` — an array of `ILlmFunction` objects, one per method
+- `config` — the generation configuration applied
+
+Pass `app.functions` to your LLM provider as the tool list. You are responsible for executing the selected function yourself.
+
+### Config options
+
+```typescript
+const app = typia.llm.application<ShoppingService>({
+  validate: null,          // use default type-based validation
+});
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `validate` | `null \| IValidationHook<Class>` | `null` | Override the built-in validator per method name |
+
+To enable strict mode (OpenAI structured output — all properties required, `additionalProperties: false`), pass the `Config` generic:
+
+```typescript
+// Strict mode: all properties become required
+const app = typia.llm.application<ShoppingService, { strict: true }>();
+```
+
+To reject extra properties from LLM responses:
+
+```typescript
+const app = typia.llm.application<ShoppingService, { equals: true }>();
+```
+
+---
+
+## `typia.llm.controller<Class>(name, execute)`
+
+```typescript
+import typia from "typia";
+import typia, { ILlmController } from "typia";
+
+const controller: ILlmController<Calculator> =
+  typia.llm.controller<Calculator>("calculator", new Calculator());
+```
+
+`controller()` combines `application()` with a bound executor. It returns an `ILlmController` with:
+
+- `protocol` — always `"class"`
+- `name` — the identifier string you supplied
+- `application` — the `ILlmApplication` schema
+- `execute` — the class instance to call methods on
+
+Use `controller()` when you want to pass the executor along with schemas to a helper (such as `registerMcpControllers` from `@typia/mcp`) that handles routing automatically.
+
+---
+
+## `typia.llm.parameters<P>()`
+
+Generates a raw `ILlmSchema.IParameters` object for a single function's parameter type — no `ILlmApplication` wrapper.
+
+```typescript
+import typia, { ILlmSchema } from "typia";
+
+interface SearchParams {
+  query: string;
+  limit: number;
+  filters?: string[];
+}
+
+const params: ILlmSchema.IParameters =
+  typia.llm.parameters<SearchParams>();
+```
+
+Use this when you are building a single-function tool and do not need the full application structure.
+
+---
+
+## `typia.llm.schema<T>($defs)`
+
+Generates a raw `ILlmSchema` for any TypeScript type. Unlike `parameters()`, this is not wrapped in a parameters object; you pass a `$defs` map for `$ref` resolution.
+
+```typescript
+import typia, { ILlmSchema } from "typia";
+
+const $defs: Record<string, ILlmSchema> = {};
+const schema = typia.llm.schema<{ id: string; name: string }>($defs);
+```
+
+---
+
+## The `ILlmApplication` structure
+
+```typescript
+interface ILlmApplication<Class extends object = any> {
+  functions: ILlmFunction[];
+  config: ILlmApplication.IConfig<Class>;
+  __class?: Class | undefined;   // phantom type — never access at runtime
+}
+```
+
+### `ILlmFunction`
+
+Each entry in `functions` has the following shape:
+
+```typescript
+interface ILlmFunction {
+  name: string;                            // max 64 chars (OpenAI limit)
+  parameters: ILlmSchema.IParameters;      // input schema
+  output?: ILlmSchema.IParameters;         // return type schema (undefined for void)
+  description?: string;                    // from JSDoc — guides LLM selection
+  deprecated?: boolean;                    // from @deprecated JSDoc tag
+  tags?: string[];                         // from @tag JSDoc annotations
+
+  parse:    (str: string)   => IJsonParseResult<unknown>;  // lenient JSON parse + coerce
+  coerce:   (data: unknown) => unknown;                    // coerce pre-parsed object
+  validate: (args: unknown) => IValidation<unknown>;       // type-check arguments
+}
+```
+
+<Note>
+  JSDoc comments on your class methods become the `description` field. Write clear JSDoc — the LLM reads it to decide which function to call.
+</Note>
+
+### `ILlmController`
+
+```typescript
+interface ILlmController<Class extends object = any> {
+  protocol: "class";
+  name: string;
+  application: ILlmApplication<Class>;
+  execute: Class;
+}
+```
+
+---
+
+## Model types
+
+The `Config` generic controls schema compatibility per provider:
+
+| Value | Provider | Notes |
+|---|---|---|
+| `"chatgpt"` | OpenAI GPT | Supports strict mode, no `anyOf` in some contexts |
+| `"claude"` | Anthropic Claude | Full `anyOf` support |
+| `"gemini"` | Google Gemini | No `anyOf`, no `additionalProperties` |
+| `"llama"` | Meta Llama | Community models |
+| `"3.0"` | Generic JSON Schema 3.0 | |
+| `"3.1"` | Generic JSON Schema 3.1 | |
+
+---
+
+## End-to-end example
+
+The following example shows the complete workflow: define a class, generate an application, send schemas to ChatGPT, and execute the selected function with validated arguments.
+
+<Steps>
+  <Step title="Define your service class">
+    Write a TypeScript class with methods. Add JSDoc comments — the LLM uses them to understand what each function does.
+
+    ```typescript
+    import { tags } from "typia";
+
+    /**
+     * Shopping cart service for the online store.
+     */
+    class ShoppingService {
+      /**
+       * Search for products by keyword.
+       * @param input Search parameters
+       */
+      searchProducts(input: {
+        /** Search keyword */
+        query: string;
+        /** Maximum results to return */
+        limit: number & tags.Minimum<1> & tags.Maximum<50>;
+      }): Promise<{ id: string; name: string; price: number }[]> {
+        // real implementation
+        return Promise.resolve([]);
+      }
+
+      /**
+       * Add a product to the cart.
+       * @param input Cart update parameters
+       */
+      addToCart(input: {
+        productId: string & tags.Format<"uuid">;
+        quantity: number & tags.Minimum<1>;
+      }): Promise<{ cartId: string; total: number }> {
+        // real implementation
+        return Promise.resolve({ cartId: "abc", total: 0 });
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Generate the application schema">
+    Call `typia.llm.application()` once at startup — typically in your application bootstrap code.
+
+    ```typescript
+    import typia from "typia";
+
+    const app = typia.llm.application<ShoppingService>();
+
+    // app.functions contains two entries: searchProducts and addToCart
+    console.log(app.functions.map((f) => f.name));
+    // ["searchProducts", "addToCart"]
+    ```
+  </Step>
+
+  <Step title="Register schemas with your LLM provider">
+    <Tabs>
+      <Tab title="OpenAI">
+        ```typescript
+        import OpenAI from "openai";
+
+        const openai = new OpenAI();
+        const service = new ShoppingService();
+
+        const response = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [{ role: "user", content: "Find me some headphones under $100" }],
+          tools: app.functions.map((fn) => ({
+            type: "function" as const,
+            function: {
+              name: fn.name,
+              description: fn.description,
+              parameters: fn.parameters,
+            },
+          })),
+        });
+        ```
+      </Tab>
+      <Tab title="Anthropic Claude">
+        ```typescript
+        import Anthropic from "@anthropic-ai/sdk";
+
+        const anthropic = new Anthropic();
+
+        const response = await anthropic.messages.create({
+          model: "claude-3-5-sonnet-20241022",
+          max_tokens: 1024,
+          messages: [{ role: "user", content: "Find me some headphones under $100" }],
+          tools: app.functions.map((fn) => ({
+            name: fn.name,
+            description: fn.description ?? "",
+            input_schema: fn.parameters,
+          })),
+        });
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Execute with validation and auto-correction">
+    When the LLM selects a function, parse and validate its arguments before calling your service. If validation fails, send formatted errors back for self-correction.
+
+    ```typescript
+    import { LlmJson } from "@typia/utils";
+
+    async function handleToolCall(
+      fnName: string,
+      rawArgs: string,
+      service: ShoppingService,
+    ) {
+      const fn = app.functions.find((f) => f.name === fnName);
+      if (!fn) throw new Error(`Unknown function: ${fnName}`);
+
+      // Step 1: Parse (handles malformed JSON + type coercion)
+      const parsed = fn.parse(rawArgs);
+      if (!parsed.success) {
+        // JSON was too malformed to recover — ask LLM to retry
+        return `Parse error: ${JSON.stringify(parsed.errors)}`;
+      }
+
+      // Step 2: Validate types
+      const validation = fn.validate(parsed.data);
+      if (!validation.success) {
+        // Format errors as annotated JSON for LLM self-correction
+        return LlmJson.stringify(validation);
+      }
+
+      // Step 3: Execute — arguments are now guaranteed type-safe
+      return (service as any)[fnName](validation.data);
+    }
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Using `controller()` for cleaner routing
+
+When you use `controller()`, the execute instance travels with the schema. This is the expected input shape for MCP and other Typia integrations.
+
+```typescript
+import typia from "typia";
+import { registerMcpControllers } from "@typia/mcp";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "shop-server", version: "1.0.0" });
+
+registerMcpControllers({
+  server,
+  controllers: [
+    typia.llm.controller<ShoppingService>("shopping", new ShoppingService()),
+  ],
+});
+```
+
+See [MCP integration](/integrations/mcp) for the full setup guide.
+
+---
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Structured output" icon="brackets-curly" href="/llm/structured-output">
+    Constrain an LLM to produce a single typed object instead of choosing from multiple functions.
+  </Card>
+  <Card title="LLM JSON utilities" icon="wrench" href="/llm/json">
+    Deep-dive into `parse()`, `coerce()`, and error formatting with `LlmJson.stringify()`.
+  </Card>
+</CardGroup>

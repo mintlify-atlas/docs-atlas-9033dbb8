@@ -1,0 +1,140 @@
+---
+title: "Introduction to Typia: TypeScript Runtime Validation"
+description: "Learn what Typia is, how compile-time code generation works, and why validators run 20,000x faster than class-validator with no extra schema files."
+keywords: ["typia", "typescript", "runtime validation", "type guard", "transformer", "compile-time code generation"]
+---
+
+Typia is a TypeScript transformer library that generates runtime validation and serialization code directly from your TypeScript types at compile time. This page explains what Typia is, how its transformation model works, and why it is significantly faster than alternatives that require separate schema definitions.
+
+## What is Typia?
+
+Most validation libraries require you to define schemas in addition to TypeScript types: a class decorated with `@IsEmail()`, a Zod `z.object({})`, or an io-ts `t.type({})`. Those schemas exist solely to describe what your TypeScript types already describe. Typia eliminates that duplication.
+
+When you call a Typia function such as `typia.is<User>(input)`, the TypeScript compiler — augmented by Typia's transformer plugin — analyzes the type `User` at compile time and replaces your call with a specialized, inline validation function. No reflection, no schema objects, and no runtime type analysis.
+
+The result is a plain JavaScript function that checks exactly what your type says, with zero overhead from schema parsing or class introspection.
+
+## Performance
+
+Because Typia generates direct property-checking code rather than interpreting schemas at runtime, the compiled output runs substantially faster than schema-based libraries.
+
+> - Runtime validator is **20,000x faster** than `class-validator`
+> - JSON serialization is **200x faster** than `class-transformer`
+> - LLM function calling accuracy improves from **6.75% → 100%**
+
+These numbers come from benchmarks run on an 11th Gen Intel Core i5-1135G7 @ 2.40GHz. See the [benchmark results](https://github.com/samchon/typia/tree/master/benchmark/results/11th%20Gen%20Intel(R)%20Core(TM)%20i5-1135G7%20%40%202.40GHz) for full details.
+
+## The transformation concept
+
+Typia works by intercepting TypeScript compilation. When the compiler encounters a `typia.*<T>()` call, the transformer reads the structure of `T` and emits equivalent runtime code in the output JavaScript.
+
+Here is what happens to a simple type check:
+
+```typescript
+// Source: src/check.ts
+import typia from "typia";
+
+export const checkString = typia.createIs<string>();
+```
+
+After compilation, the output looks like this:
+
+```javascript
+// Output: dist/check.js
+import typia from "typia";
+
+export const checkString = (() => {
+  return (input) => "string" === typeof input;
+})();
+```
+
+The generic type `string` has been analyzed, and the body of the validator has been written for you. For complex nested types with union members, arrays, optional fields, and type tags, Typia generates correspondingly detailed inline checks — all without any runtime schema object.
+
+## Zero-schema philosophy
+
+Traditional libraries maintain a parallel universe of schema objects:
+
+```typescript
+// class-validator: decorators annotate a class
+class UserDto {
+  @IsEmail()
+  email: string;
+
+  @Min(0)
+  @IsInt()
+  age: number;
+}
+
+// Zod: a separate schema object mirrors the type
+const UserSchema = z.object({
+  email: z.string().email(),
+  age: z.number().int().min(0),
+});
+type User = z.infer<typeof UserSchema>; // derived from schema
+```
+
+With Typia, the TypeScript type is the single source of truth:
+
+```typescript
+import typia, { tags } from "typia";
+
+interface User {
+  email: string & tags.Format<"email">;
+  age: number & tags.Minimum<0> & tags.Type<"int32">;
+}
+
+// The interface above is the only definition needed
+const user = typia.assert<User>(input);
+```
+
+Type tags such as `tags.Format<"email">` and `tags.Minimum<0>` are TypeScript intersection types that carry constraint metadata. They are invisible to normal TypeScript code but are read by Typia's transformer to generate the appropriate validation logic.
+
+## Comparison with other libraries
+
+| Feature | Typia | class-validator | Zod | io-ts |
+|---|---|---|---|---|
+| Schema definition required | No | Class + decorators | `z.object(...)` | `t.type(...)` |
+| Works with plain interfaces | Yes | No (classes only) | No (schema first) | No (codec first) |
+| Validation speed | ~20,000x faster | baseline | ~10x slower | ~15x slower |
+| JSON stringify speed | ~200x faster | N/A | N/A | N/A |
+| Compile-time code generation | Yes | No | No | No |
+| TypeScript type inference | Native | Derived from class | Derived from schema | Derived from codec |
+| LLM function calling | Built-in | No | Via adapter | No |
+| Protocol Buffer support | Built-in | No | No | No |
+
+## Feature overview
+
+Typia provides five main capabilities, all derived from the same pure TypeScript types.
+
+**Runtime validators** (`typia.is`, `typia.assert`, `typia.validate`) check that an unknown value conforms to a TypeScript type at runtime. They support nested objects, union types, optional properties, arrays, and type-tag constraints.
+
+**JSON functions** (`typia.json.schema`, `typia.json.assertParse`, `typia.json.assertStringify`) generate JSON Schemas from types and provide type-safe, high-performance JSON parsing and serialization.
+
+**LLM function calling** (`typia.llm.application`, `typia.llm.structuredOutput`) builds function-calling schemas and validators for AI models, turning TypeScript class method signatures into validated LLM tool definitions.
+
+**Protocol Buffer** (`typia.protobuf.message`, `typia.protobuf.assertEncode`, `typia.protobuf.assertDecode`) generates `.proto` message definitions and encodes/decodes binary Protocol Buffer data from TypeScript types.
+
+**Random generator** (`typia.random`) produces random data conforming exactly to your TypeScript types, useful for testing and mock data generation.
+
+## Explore
+
+<CardGroup cols={2}>
+  <Card title="Setup" icon="gear" href="/setup">
+    Install Typia and configure your TypeScript project.
+  </Card>
+  <Card title="Core concepts" icon="lightbulb" href="/concepts">
+    Understand how transformation, type tags, and validators work together.
+  </Card>
+  <Card title="Runtime validators" icon="shield-check" href="/validators/overview">
+    Learn the `is`, `assert`, and `validate` functions in depth.
+  </Card>
+  <Card title="JSON" icon="brackets-curly" href="/json/schema">
+    Type-safe JSON Schema generation, parsing, and serialization.
+  </Card>
+  <Card title="LLM & AI" icon="brain" href="/llm/overview">
+    Function calling schemas and structured output for AI integrations.
+  </Card>
+  <Card title="Protocol Buffer" icon="server" href="/protobuf/overview">
+    Binary encoding and decoding from TypeScript types.
+  </Card>
+</CardGroup>

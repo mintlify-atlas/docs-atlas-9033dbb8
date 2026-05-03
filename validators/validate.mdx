@@ -1,0 +1,259 @@
+---
+title: "typia.validate: Collect All Validation Errors, Never Throw"
+description: "typia.validate collects every type mismatch into IValidation without throwing. Covers validateEquals, IValidation.IError structure, and Standard Schema V1."
+---
+
+The `validate` family of functions run a full validation pass over an input value and return a structured `IValidation<T>` result containing **every** error found. Unlike `assert` which stops and throws at the first mismatch, `validate` continues scanning the entire object graph, making it the right choice when you need to surface all validation problems to a user — such as form validation feedback or detailed API error responses.
+
+## typia.validate\<T\>
+
+`typia.validate<T>(input)` returns an `IValidation<T>` object. Check the `success` discriminator to determine whether validation passed or failed.
+
+```typescript
+import typia, { IValidation } from "typia";
+import { tags } from "typia";
+
+interface RegisterRequest {
+  username: string & tags.MinLength<3> & tags.MaxLength<20>;
+  email: string & tags.Format<"email">;
+  age: number & tags.Minimum<18>;
+}
+
+const result: IValidation<RegisterRequest> = typia.validate<RegisterRequest>({
+  username: "ab",           // too short
+  email: "not-an-email",   // invalid format
+  age: 15,                  // below minimum
+});
+
+if (result.success) {
+  // result.data is RegisterRequest
+  registerUser(result.data);
+} else {
+  // result.errors is IValidation.IError[]
+  result.errors.forEach((err) => {
+    console.log(`${err.path}: expected ${err.expected}, got ${String(err.value)}`);
+  });
+  // $input.username: expected string & MinLength<3>, got "ab"
+  // $input.email: expected string & Format<"email">, got "not-an-email"
+  // $input.age: expected number & Minimum<18>, got 15
+}
+```
+
+<ParamField path="input" type="T | unknown" required>
+  The value to validate. Can be typed as `T` or `unknown`.
+</ParamField>
+
+### Return value
+
+Returns `IValidation<T>` — either `IValidation.ISuccess<T>` or `IValidation.IFailure`. Never throws.
+
+## IValidation\<T\> interface
+
+```typescript
+type IValidation<T = unknown> =
+  | IValidation.ISuccess<T>
+  | IValidation.IFailure;
+
+namespace IValidation {
+  interface ISuccess<T = unknown> {
+    success: true;
+    data: T;               // validated input as T
+  }
+
+  interface IFailure {
+    success: false;
+    data: unknown;         // original (invalid) input
+    errors: IError[];      // all validation failures
+  }
+
+  interface IError {
+    path: string;          // dot-notation path, e.g. "$input.user.email"
+    expected: string;      // e.g. "string & Format<\"email\">"
+    value: unknown;        // actual value at that path
+    description?: string;  // optional human-readable context
+  }
+}
+```
+
+### IValidation.IError fields
+
+<ParamField path="path" type="string">
+  Dot-notation path from the root to the failing property. The root is always `$input`. Array elements use bracket notation: `$input.items[0].price`.
+</ParamField>
+
+<ParamField path="expected" type="string">
+  Human-readable description of what type was expected. Includes tag constraints when applicable, e.g. `"number & Minimum<0> & Maximum<100>"` or `"string & Format<\"uuid\">"`.
+</ParamField>
+
+<ParamField path="value" type="unknown">
+  The actual value found at `path`. May be `undefined` if the property was missing entirely.
+</ParamField>
+
+<ParamField path="description" type="string">
+  Optional additional context. Set automatically when `value` is `undefined`.
+</ParamField>
+
+## typia.validateEquals\<T\> — strict mode
+
+`validateEquals<T>` works identically to `validate<T>` but also reports extra properties that are not declared in `T`. The `expected` field for those errors will be `"undefined"`.
+
+```typescript
+import typia from "typia";
+
+interface UserProfile {
+  name: string;
+  bio: string;
+}
+
+const result = typia.validateEquals<UserProfile>({
+  name: "Alice",
+  bio: "Engineer",
+  favoriteColor: "blue", // not in UserProfile
+});
+
+if (!result.success) {
+  result.errors[0].path;     // "$input.favoriteColor"
+  result.errors[0].expected; // "undefined"
+  result.errors[0].value;    // "blue"
+}
+```
+
+## Factory functions
+
+`createValidate<T>()` and `createValidateEquals<T>()` return reusable validation functions. They also implement the `StandardSchemaV1` interface (see below).
+
+<CodeGroup>
+
+```typescript createValidate
+import typia from "typia";
+
+interface Order {
+  orderId: string;
+  items: { productId: number; qty: number }[];
+  total: number;
+}
+
+const validateOrder = typia.createValidate<Order>();
+
+// Reuse across multiple requests
+app.post("/orders", (req, res) => {
+  const result = validateOrder(req.body);
+  if (!result.success) {
+    return res.status(400).json({ errors: result.errors });
+  }
+  return res.json(createOrder(result.data));
+});
+```
+
+```typescript createValidateEquals
+import typia from "typia";
+
+const validateEqualsOrder = typia.createValidateEquals<Order>();
+
+// Also rejects extra properties
+const result = validateEqualsOrder(strictPayload);
+```
+
+</CodeGroup>
+
+## StandardSchemaV1 compatibility
+
+The functions returned by `createValidate<T>()` and `createValidateEquals<T>()` implement the [`StandardSchemaV1`](https://standardschema.dev) interface. This allows typia validators to be used with any library or framework that accepts Standard Schema validators — such as form libraries, ORM validation hooks, or RPC frameworks.
+
+```typescript
+import typia from "typia";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
+
+interface Payload {
+  name: string;
+  value: number;
+}
+
+// The returned function satisfies StandardSchemaV1<Payload, Payload>
+const schema: StandardSchemaV1<Payload, Payload> =
+  typia.createValidate<Payload>();
+
+// Pass to any Standard Schema-compatible library
+const formSchema = buildForm(schema);
+```
+
+<Note>
+  `createValidate` and `createValidateEquals` are the only validator factories that implement `StandardSchemaV1`. The `is` and `assert` families do not implement this interface.
+</Note>
+
+## All validate variants at a glance
+
+<Tabs>
+  <Tab title="validate">
+    ```typescript
+    function validate<T>(input: T | unknown): IValidation<T>
+    ```
+    Collects all errors. Extra properties are allowed.
+  </Tab>
+  <Tab title="validateEquals">
+    ```typescript
+    function validateEquals<T>(input: T | unknown): IValidation<T>
+    ```
+    Collects all errors. Extra properties are reported as errors.
+  </Tab>
+  <Tab title="createValidate">
+    ```typescript
+    function createValidate<T>():
+      ((input: unknown) => IValidation<T>) & StandardSchemaV1<T, T>
+    ```
+    Factory — reusable validate function with Standard Schema support.
+  </Tab>
+  <Tab title="createValidateEquals">
+    ```typescript
+    function createValidateEquals<T>():
+      ((input: unknown) => IValidation<T>) & StandardSchemaV1<T, T>
+    ```
+    Factory — reusable validateEquals function with Standard Schema support.
+  </Tab>
+</Tabs>
+
+## Complete example: form validation response
+
+```typescript
+import typia from "typia";
+import { tags } from "typia";
+
+interface SignupForm {
+  username: string & tags.MinLength<3> & tags.MaxLength<20>;
+  email: string & tags.Format<"email">;
+  password: string & tags.MinLength<8>;
+  age: number & tags.Minimum<13> & tags.Maximum<120>;
+}
+
+interface FieldError {
+  field: string;
+  message: string;
+}
+
+function validateSignup(body: unknown): FieldError[] | null {
+  const result = typia.validate<SignupForm>(body);
+
+  if (result.success) {
+    return null; // no errors
+  }
+
+  return result.errors.map((err) => ({
+    // Convert "$input.username" -> "username"
+    field: err.path.replace(/^\$input\./, ""),
+    message: `Expected ${err.expected}, received ${
+      err.value === undefined ? "nothing" : JSON.stringify(err.value)
+    }`,
+  }));
+}
+
+// POST /signup
+app.post("/signup", (req, res) => {
+  const errors = validateSignup(req.body);
+  if (errors) {
+    return res.status(422).json({ errors });
+  }
+  // req.body is structurally valid — safe to proceed
+  const user = typia.assert<SignupForm>(req.body);
+  return res.json(createAccount(user));
+});
+```

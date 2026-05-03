@@ -1,0 +1,210 @@
+---
+title: "Typia with NestJS — Interface-Based Request Validation"
+description: "Replace class-validator in NestJS with Typia's ValidationPipe. Define DTOs as plain TypeScript interfaces with no decorator boilerplate or extra schemas."
+---
+
+NestJS ships with `class-validator` and `class-transformer` as its default validation stack. They require you to define DTOs as classes decorated with annotations like `@IsEmail()` and `@IsNumber()`. Typia offers a simpler alternative: define your DTOs as plain TypeScript interfaces and validate them with `typia.assert<T>()`, which generates the validation code at compile time from your type definitions.
+
+This page shows how to build a custom `ValidationPipe` using Typia, how to use it in controllers, and how to integrate with `@nestjs/swagger` for OpenAPI generation.
+
+## Installation
+
+<Steps>
+  <Step title="Install NestJS and Typia">
+    If you have an existing NestJS project, install Typia and run the setup wizard:
+
+    ```bash
+    npm install typia
+    npx typia setup
+    ```
+
+    For a new project, scaffold NestJS first and then add Typia:
+
+    ```bash
+    npm install -g @nestjs/cli
+    nest new my-app
+    cd my-app
+    npm install typia
+    npx typia setup
+    ```
+  </Step>
+
+  <Step title="Verify tsconfig.json">
+    The setup wizard adds the transformer plugin, but confirm your `tsconfig.json` includes:
+
+    ```json
+    {
+      "compilerOptions": {
+        "strict": true,
+        "skipLibCheck": true,
+        "plugins": [
+          { "transform": "typia/lib/transform" }
+        ]
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Creating a Typia ValidationPipe
+
+NestJS `ValidationPipe` is a class that implements the `PipeTransform` interface. Replace `class-validator` parsing with `typia.assert<T>()`:
+
+```typescript
+// src/pipes/typia-validation.pipe.ts
+import { BadRequestException, Injectable, PipeTransform } from "@nestjs/common";
+import typia, { TypeGuardError } from "typia";
+
+@Injectable()
+export class TypiaValidationPipe<T> implements PipeTransform {
+  private readonly assert: (input: unknown) => T;
+
+  constructor(assert: (input: unknown) => T) {
+    this.assert = assert;
+  }
+
+  transform(value: unknown): T {
+    try {
+      return this.assert(value);
+    } catch (error) {
+      if (error instanceof TypeGuardError) {
+        throw new BadRequestException({
+          message: "Validation failed",
+          path: error.path,
+          expected: error.expected,
+          value: error.value,
+        });
+      }
+      throw new BadRequestException("Validation failed");
+    }
+  }
+}
+```
+
+<Note>
+`typia.assert<T>()` throws a `TypeGuardError` when validation fails. The error includes the exact path, expected type, and received value — ideal for structured 400 responses.
+</Note>
+
+## Defining DTOs as interfaces
+
+With Typia, your DTOs are plain TypeScript interfaces. No classes, no decorators:
+
+```typescript
+// src/dto/create-user.dto.ts
+import { tags } from "typia";
+
+export interface CreateUserDto {
+  name: string;
+  email: string & tags.Format<"email">;
+  age: number & tags.Minimum<0> & tags.Maximum<150>;
+  roles: Array<"admin" | "user" | "moderator">;
+}
+```
+
+Typia reads the interface definition and the `tags` constraints at compile time and generates a fast runtime validator. There is no runtime reflection and no decorator metadata.
+
+## Using the pipe in a controller
+
+Pass a pre-bound `typia.assert<T>` function to `TypiaValidationPipe` using `@UsePipes`:
+
+```typescript
+// src/users/users.controller.ts
+import {
+  Body,
+  Controller,
+  HttpCode,
+  Post,
+  UsePipes,
+} from "@nestjs/common";
+import typia from "typia";
+
+import { CreateUserDto } from "../dto/create-user.dto";
+import { TypiaValidationPipe } from "../pipes/typia-validation.pipe";
+
+@Controller("users")
+export class UsersController {
+  @Post()
+  @HttpCode(201)
+  @UsePipes(new TypiaValidationPipe(typia.createAssert<CreateUserDto>()))
+  create(@Body() body: CreateUserDto) {
+    // `body` is fully validated and typed here
+    return { id: crypto.randomUUID(), ...body };
+  }
+}
+```
+
+<Tip>
+`typia.createAssert<T>()` returns a reusable assertion function. Using it with `new TypiaValidationPipe(...)` means the validator is compiled once and reused for every request, rather than being recreated on each call.
+</Tip>
+
+## Applying globally
+
+You can register the pipe globally in `main.ts` for a single type:
+
+```typescript
+// src/main.ts
+import { NestFactory } from "@nestjs/core";
+import { AppModule } from "./app.module";
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  // Apply a global pipe for a specific DTO if needed,
+  // or rely on per-route @UsePipes decorators.
+  await app.listen(3000);
+}
+bootstrap();
+```
+
+For per-route validation (the more common pattern), use `@UsePipes` at the controller or method level as shown above.
+
+## Integration with @nestjs/swagger
+
+Typia can generate JSON Schema from your TypeScript interfaces using `typia.json.schemas()`. You can feed this schema into `@nestjs/swagger` to produce OpenAPI documentation without annotating each DTO manually.
+
+```typescript
+// src/openapi/schema-generator.ts
+import typia from "typia";
+import { CreateUserDto } from "../dto/create-user.dto";
+
+// Generate JSON Schema for your DTOs
+const schemas = typia.json.schemas<[CreateUserDto]>();
+```
+
+For a full OpenAPI setup with Swagger UI, configure the `SwaggerModule` as normal and use Typia's schema output to populate your `DocumentBuilder`:
+
+```typescript
+// src/main.ts
+import { NestFactory } from "@nestjs/core";
+import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
+import { AppModule } from "./app.module";
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+
+  const config = new DocumentBuilder()
+    .setTitle("My API")
+    .setVersion("1.0")
+    .build();
+
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup("api", app, document);
+
+  await app.listen(3000);
+}
+bootstrap();
+```
+
+<CardGroup cols={2}>
+  <Card title="typia.assert" href="/validators/assert">
+    Learn how assert works and what errors it throws
+  </Card>
+  <Card title="Validation Tags" href="/validators/tags">
+    Constrain types with Format, Minimum, Maximum, and more
+  </Card>
+  <Card title="JSON Schema" href="/json/schema">
+    Generate JSON Schema from TypeScript types
+  </Card>
+  <Card title="Setup Wizard" href="/integrations/setup-wizard">
+    Configure the ts-patch transformer for tsc-based projects
+  </Card>
+</CardGroup>

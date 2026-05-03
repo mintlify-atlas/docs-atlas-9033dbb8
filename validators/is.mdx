@@ -1,0 +1,222 @@
+---
+title: "typia.is: Boolean Type Guards for TypeScript Runtime Checks"
+description: "typia.is and typia.equals are TypeScript type predicates that narrow types at runtime without throwing — returning a plain boolean true or false."
+---
+
+The `is` family of functions perform runtime type validation and return a plain `boolean`. They act as TypeScript **type predicates** (`input is T`), so when you use them in an `if` condition the compiler automatically narrows the type inside the branch. No exceptions are ever thrown — use `assert` if you want an error on failure, or `validate` if you need every error collected.
+
+## typia.is\<T\>
+
+`typia.is<T>(input)` returns `true` if `input` conforms to type `T`, or `false` otherwise. Extra properties are tolerated.
+
+```typescript
+import typia from "typia";
+
+interface User {
+  id: number;
+  email: string;
+}
+
+const raw: unknown = JSON.parse(body);
+
+if (typia.is<User>(raw)) {
+  // TypeScript narrows: raw is User here
+  console.log(raw.email);
+} else {
+  // raw is still unknown here
+  console.error("Invalid user payload");
+}
+```
+
+<ParamField path="input" type="T | unknown" required>
+  The value to check. Can be typed as `T` (refines to a type predicate) or `unknown` (common for external data).
+</ParamField>
+
+### Return value
+
+Returns `input is T` — a TypeScript type predicate. When the function returns `true`, the compiler narrows `input` to type `T` in all subsequent code in the same branch.
+
+### Difference from typeof / instanceof
+
+`typeof` and `instanceof` only check primitive categories and class inheritance. `typia.is` checks the full recursive structure of your interface — every nested property, every array element, every union variant. It also validates [type tags](/validators/tags) like `Format<"email">` or `Minimum<0>`.
+
+```typescript
+import typia from "typia";
+import { tags } from "typia";
+
+interface Product {
+  id: number & tags.Type<"uint32">;
+  name: string & tags.MinLength<1> & tags.MaxLength<100>;
+  price: number & tags.Minimum<0>;
+  tags: string[];
+}
+
+// Deep structural check including tag constraints
+const isValid = typia.is<Product>(input);
+```
+
+## typia.equals\<T\> — strict mode
+
+`equals<T>` is identical to `is<T>` except it also returns `false` when the input contains **any property not declared in `T`**.
+
+```typescript
+import typia from "typia";
+
+interface Config {
+  host: string;
+  port: number;
+}
+
+const loose = { host: "localhost", port: 3000, extraKey: true };
+
+typia.is<Config>(loose);     // true  — extra property ignored
+typia.equals<Config>(loose); // false — extra property rejected
+```
+
+Use `equals` when you need to detect unexpected keys — for example, validating that a configuration file does not contain unrecognized options, or checking that an API client sends exactly the expected shape.
+
+## Type narrowing in branches
+
+Because both `is` and `equals` return type predicates, TypeScript applies full narrowing inside `if`/`else` and `switch` blocks:
+
+```typescript
+import typia from "typia";
+
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+function area(input: unknown): number {
+  if (typia.is<Shape>(input)) {
+    // input is Shape here
+    if (input.kind === "circle") {
+      return Math.PI * input.radius ** 2;
+    }
+    return input.side ** 2;
+  }
+  throw new Error("Not a valid shape");
+}
+```
+
+This is especially useful in filter operations, where you want to keep only valid elements:
+
+```typescript
+const rawItems: unknown[] = await fetchItems();
+const users = rawItems.filter(typia.createIs<User>());
+// users is User[]
+```
+
+## Factory functions
+
+`createIs<T>()` and `createEquals<T>()` return reusable type guard functions. The generic `T` **must** be specified when calling the factory.
+
+<CodeGroup>
+
+```typescript createIs
+import typia from "typia";
+
+interface Order {
+  orderId: string;
+  customerId: number;
+  total: number;
+}
+
+const isOrder = typia.createIs<Order>();
+
+// Use as array filter
+const orders = rawData.filter(isOrder);
+// orders is Order[]
+
+// Use as a standalone guard
+if (isOrder(value)) {
+  processOrder(value); // value is Order
+}
+```
+
+```typescript createEquals
+import typia from "typia";
+
+interface ApiResponse {
+  status: number;
+  data: unknown;
+}
+
+const isExactApiResponse = typia.createEquals<ApiResponse>();
+
+// Rejects any extra properties
+const responses = items.filter(isExactApiResponse);
+```
+
+</CodeGroup>
+
+## All is variants at a glance
+
+<Tabs>
+  <Tab title="is">
+    ```typescript
+    function is<T>(input: T | unknown): input is T
+    ```
+    Returns `true` if valid. Extra properties are allowed.
+  </Tab>
+  <Tab title="equals">
+    ```typescript
+    function equals<T>(input: T | unknown): input is T
+    ```
+    Returns `true` if valid. Extra properties cause `false`.
+  </Tab>
+  <Tab title="createIs">
+    ```typescript
+    function createIs<T>(): (input: unknown) => input is T
+    ```
+    Factory — creates a reusable `is` function.
+  </Tab>
+  <Tab title="createEquals">
+    ```typescript
+    function createEquals<T>(): (input: unknown) => input is T
+    ```
+    Factory — creates a reusable `equals` function.
+  </Tab>
+</Tabs>
+
+## When to use is vs. assert vs. validate
+
+| Need | Use |
+|---|---|
+| Check a value and branch on it | `is` / `equals` |
+| Validate and immediately use the typed value | `assert` / `assertEquals` |
+| Collect all errors for user feedback | `validate` / `validateEquals` |
+
+<Note>
+  `typia.is` never throws — not even for internal errors. If the transformer is missing (you forgot to configure the plugin), calling any `typia.*` function at runtime will throw a `NoTransformConfigurationError`. This is a setup issue, not a validation failure.
+</Note>
+
+## Complete example
+
+```typescript
+import typia from "typia";
+import { tags } from "typia";
+
+interface SearchParams {
+  query: string & tags.MinLength<1> & tags.MaxLength<200>;
+  page: number & tags.Minimum<1>;
+  limit: number & tags.Minimum<1> & tags.Maximum<100>;
+}
+
+// Middleware: validate query parameters
+function parseSearchParams(raw: unknown): SearchParams | null {
+  if (typia.is<SearchParams>(raw)) {
+    return raw; // narrowed to SearchParams
+  }
+  return null;
+}
+
+// Usage in a route handler
+app.get("/search", (req, res) => {
+  const params = parseSearchParams(req.query);
+  if (!params) {
+    return res.status(400).json({ error: "Invalid search parameters" });
+  }
+  // params is SearchParams — safe to use
+  return res.json(search(params.query, params.page, params.limit));
+});
+```

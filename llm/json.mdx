@@ -1,0 +1,327 @@
+---
+title: "LLM JSON Parsing, Coercion, and Error Feedback"
+description: "Repair malformed LLM JSON, fix type mismatches with coercion, and send annotated error feedback so models self-correct using Typia's lenient parse utilities."
+---
+
+LLMs do not always produce valid JSON. They include comments, trailing commas, unquoted keys, or wrap their output in markdown code fences. Even when the JSON parses successfully, the values often have wrong types — a number returned as a string, a boolean encoded as `"true"`. This page covers the full toolkit Typia provides to handle these problems: lenient parsing with `typia.llm.parse<T>()`, type coercion with `typia.llm.coerce<T>()`, and structured error feedback with `LlmJson.stringify()` from `@typia/utils`.
+
+## Why LLM JSON is often malformed
+
+Common issues produced by LLMs when generating JSON:
+
+- **Trailing commas** — `{"a": 1, "b": 2,}` (invalid JSON)
+- **JavaScript-style comments** — `// field description` or `/* ... */`
+- **Unquoted keys** — `{name: "Alice"}` instead of `{"name": "Alice"}`
+- **Incomplete keywords** — `tru`, `fal`, `nul` (truncated output)
+- **Unclosed brackets** — generation cut off mid-structure
+- **Markdown fences** — output wrapped in ` ```json ... ``` `
+- **Double-stringified values** — `"42"` where `42` is expected
+- **Junk prefix text** — "Here is the JSON: \{...\}" before the actual object
+
+Standard `JSON.parse()` fails on any of these. Typia's lenient parser recovers as much data as possible and reports exactly what went wrong.
+
+---
+
+## `typia.llm.parse<P>(input)`
+
+Parses a raw string from LLM output with full leniency and schema-based type coercion.
+
+```typescript
+import typia, { IJsonParseResult } from "typia";
+
+interface SearchParams {
+  query: string;
+  limit: number;
+  tags: string[];
+}
+
+const result: IJsonParseResult<SearchParams> =
+  typia.llm.parse<SearchParams>(`{"query": "headphones", "limit": "10", "tags": ["audio"]}`);
+
+if (result.success) {
+  console.log(result.data.limit); // 10 (number, not "10")
+} else {
+  console.log(result.errors);  // array of IJsonParseResult.IError
+}
+```
+
+### What `parse()` does
+
+1. **Lenient parsing** — handles all the malformed JSON patterns listed above.
+2. **Schema-based coercion** — after parsing, applies type corrections based on the `Parameters` schema inferred from `P`:
+   - `"42"` → `42` when schema expects `number`
+   - `"true"` → `true` when schema expects `boolean`
+   - `"null"` → `null` when schema expects `null`
+   - `"{...}"` → `{...}` when schema expects `object`
+   - `"[...]"` → `[...]` when schema expects `array`
+
+<Note>
+  `parse()` does **not** validate types — it only makes a best-effort attempt to coerce values. Always follow up with `ILlmFunction.validate()` or `ILlmStructuredOutput.validate()`.
+</Note>
+
+### `IJsonParseResult<T>`
+
+```typescript
+type IJsonParseResult<T> =
+  | { success: true;  data: T }
+  | { success: false; data: DeepPartial<T> | undefined; input: string; errors: IError[] };
+```
+
+On failure, `data` contains whatever could be recovered — useful for partial results in streaming scenarios.
+
+---
+
+## `typia.llm.coerce<P>(input)`
+
+Applies schema-based type coercion to an **already-parsed** object. Use this when your SDK (Vercel AI, LangChain, MCP, etc.) has already parsed the JSON internally and gives you a plain JavaScript object.
+
+```typescript
+import typia from "typia";
+
+interface OrderParams {
+  productId: string;
+  quantity: number;
+  rush: boolean;
+}
+
+// SDK gave us a pre-parsed object with wrong types
+const fromSdk = { productId: "abc-123", quantity: "3", rush: "true" };
+
+const coerced = typia.llm.coerce<OrderParams>(fromSdk);
+// { productId: "abc-123", quantity: 3, rush: true }
+```
+
+<Tip>
+  If you receive a **raw string** from the LLM, use `parse()` — it handles both lenient parsing and coercion in one step. Use `coerce()` only when the SDK has already parsed the object.
+</Tip>
+
+---
+
+## Reusable parsers and coercers
+
+`typia.llm.parse()` and `typia.llm.coerce()` regenerate the schema internally on every call. When parsing many inputs for the same type, create a reusable function once:
+
+```typescript
+import typia from "typia";
+
+// Create once at module level
+const parseSearchParams = typia.llm.createParse<SearchParams>();
+const coerceSearchParams = typia.llm.createCoerce<SearchParams>();
+
+// Use many times — no repeated schema generation
+const result1 = parseSearchParams(rawJson1);
+const result2 = parseSearchParams(rawJson2);
+```
+
+| One-shot | Reusable equivalent |
+|---|---|
+| `typia.llm.parse<P>(str)` | `typia.llm.createParse<P>()` → `(str: string) => IJsonParseResult<P>` |
+| `typia.llm.coerce<P>(obj)` | `typia.llm.createCoerce<P>()` → `(obj: P) => P` |
+
+---
+
+## `LlmJson` from `@typia/utils`
+
+The `LlmJson` namespace in `@typia/utils` provides the same parsing and coercion utilities in a runtime-friendly form (no type transformer required), plus `stringify` for error formatting.
+
+```typescript
+import { LlmJson } from "@typia/utils";
+import type { ILlmSchema } from "typia";
+```
+
+### `LlmJson.parse(input, parameters?)`
+
+```typescript
+const result = LlmJson.parse<SearchParams>(rawString, params.parameters);
+```
+
+Identical behaviour to `typia.llm.parse<P>()`, but accepts a runtime `ILlmSchema.IParameters` object. Use this when the parameters schema is already available at runtime (e.g., from `ILlmFunction.parameters`).
+
+### `LlmJson.coerce(input, parameters)`
+
+```typescript
+const coerced = LlmJson.coerce<SearchParams>(parsedObject, params.parameters);
+```
+
+Runtime-only coercion using a schema you already have.
+
+### `LlmJson.validate(parameters, equals?)`
+
+Creates a reusable validator function from a runtime schema:
+
+```typescript
+const validate = LlmJson.validate(fn.parameters);
+const result = validate(parsedArgs);
+```
+
+---
+
+## `LlmJson.stringify(failure)` — error feedback for self-correction
+
+When `validate()` fails, `LlmJson.stringify()` formats the `IValidation.IFailure` as annotated JSON. Each invalid property gets an inline `// ❌` comment describing what was expected. The output is wrapped in a markdown code block so the LLM can understand and correct its mistakes in the next turn.
+
+```typescript
+import { LlmJson } from "@typia/utils";
+import type { IValidation } from "typia";
+
+const validation: IValidation<unknown> = fn.validate(args);
+
+if (!validation.success) {
+  const feedback = LlmJson.stringify(validation);
+  // feedback looks like:
+  // ```json
+  // {
+  //   "query": "headphones",
+  //   "limit": "ten",  // ❌ [{"path":"$input.limit","expected":"number"}]
+  //   "rush": "yes"    // ❌ [{"path":"$input.rush","expected":"boolean"}]
+  // }
+  // ```
+}
+```
+
+---
+
+## The full self-correction feedback loop
+
+Putting it all together — parse, validate, feed errors back, retry:
+
+```typescript
+import typia from "typia";
+import { LlmJson } from "@typia/utils";
+import OpenAI from "openai";
+
+const openai = new OpenAI();
+const app = typia.llm.application<ShoppingService>();
+
+async function callWithCorrection(
+  userMessage: string,
+  service: ShoppingService,
+  maxRetries = 3,
+): Promise<unknown> {
+  const messages: OpenAI.ChatCompletionMessageParam[] = [
+    { role: "user", content: userMessage },
+  ];
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages,
+      tools: app.functions.map((fn) => ({
+        type: "function" as const,
+        function: {
+          name: fn.name,
+          description: fn.description,
+          parameters: fn.parameters,
+        },
+      })),
+    });
+
+    const toolCall = response.choices[0].message.tool_calls?.[0];
+    if (!toolCall) return response.choices[0].message.content;
+
+    const fn = app.functions.find((f) => f.name === toolCall.function.name);
+    if (!fn) throw new Error(`Unknown function: ${toolCall.function.name}`);
+
+    // Step 1: Lenient parse + coerce
+    const parsed = fn.parse(toolCall.function.arguments);
+    if (!parsed.success) {
+      // JSON is too broken to recover — tell the LLM
+      messages.push(
+        { role: "assistant", content: null, tool_calls: [toolCall] },
+        {
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: `Parse error: ${JSON.stringify(parsed.errors)}. Please retry with valid JSON.`,
+        },
+      );
+      continue;
+    }
+
+    // Step 2: Type validation
+    const validation = fn.validate(parsed.data);
+    if (!validation.success) {
+      // Annotated JSON tells the LLM exactly what to fix
+      const feedback = LlmJson.stringify(validation);
+      messages.push(
+        { role: "assistant", content: null, tool_calls: [toolCall] },
+        {
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: `Validation failed. Fix these errors and retry:\n${feedback}`,
+        },
+      );
+      continue;
+    }
+
+    // Step 3: Execute with guaranteed type-safe arguments
+    const result = await (service as any)[fn.name](validation.data);
+    return result;
+  }
+
+  throw new Error("Max retries exceeded");
+}
+```
+
+<Steps>
+  <Step title="Parse">
+    `fn.parse(rawJson)` handles all malformed JSON and coerces double-stringified values.
+  </Step>
+  <Step title="Validate">
+    `fn.validate(parsed.data)` performs a full type check against the generated schema.
+  </Step>
+  <Step title="Format errors">
+    `LlmJson.stringify(validation)` annotates each invalid property with an inline error comment.
+  </Step>
+  <Step title="Feed back and retry">
+    Include the annotated JSON in the next message. The LLM sees exactly which values are wrong and generates corrected arguments.
+  </Step>
+</Steps>
+
+---
+
+## Quick reference
+
+<CodeGroup>
+  ```typescript One-shot parse
+  import typia from "typia";
+
+  const result = typia.llm.parse<MyParams>(rawString);
+  if (result.success) {
+    // result.data is MyParams
+  }
+  ```
+
+  ```typescript Reusable parser
+  import typia from "typia";
+
+  const parser = typia.llm.createParse<MyParams>();
+  const r1 = parser(rawString1);
+  const r2 = parser(rawString2);
+  ```
+
+  ```typescript Coerce pre-parsed object
+  import typia from "typia";
+
+  const fixed = typia.llm.coerce<MyParams>(sdkObject);
+  ```
+
+  ```typescript Format errors for LLM
+  import { LlmJson } from "@typia/utils";
+
+  const feedback = LlmJson.stringify(validationFailure);
+  // Returns annotated JSON markdown block
+  ```
+</CodeGroup>
+
+---
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="LLM overview" icon="brain" href="/llm/overview">
+    Understand how all LLM functions fit together and the accuracy improvements they enable.
+  </Card>
+  <Card title="Application & controller" icon="code" href="/llm/application">
+    Generate function calling schemas with built-in `parse` and `validate` on every `ILlmFunction`.
+  </Card>
+</CardGroup>

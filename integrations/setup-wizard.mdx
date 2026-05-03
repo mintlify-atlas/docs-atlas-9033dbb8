@@ -1,0 +1,186 @@
+---
+title: "Typia Setup Wizard — typia setup and ts-patch Config"
+description: "Use npx typia setup to configure ts-patch, tsconfig.json plugins, and package.json scripts for Typia's TypeScript transformer in one command."
+---
+
+Typia's runtime validators and schema generators work by transforming TypeScript source code at compile time. The `npx typia setup` command is an interactive wizard that handles the entire configuration: it installs `ts-patch`, adds the Typia transformer to your `tsconfig.json` plugins array, and adds a `prepare` script to your `package.json`.
+
+This page covers the `typia setup` wizard, the `typia patch` helper, and manual configuration for cases where the wizard doesn't fit your workflow.
+
+<Note>
+If you are building a frontend project with a bundler like Vite or Webpack, use [@typia/unplugin](/integrations/unplugin) instead. The wizard-based approach is for projects that compile with `tsc` directly.
+</Note>
+
+## Running the setup wizard
+
+```bash
+npx typia setup
+```
+
+The wizard detects your package manager automatically and prompts you to choose a `tsconfig.json` file. You can also pass flags to skip the prompts:
+
+```bash
+# Specify package manager and tsconfig explicitly
+npx typia setup --manager pnpm --project tsconfig.json
+
+# With pnpm
+pnpm typia setup --manager pnpm
+
+# With yarn (yarn berry is not supported)
+yarn typia setup --manager yarn
+
+# With bun
+bun typia setup
+```
+
+### What the wizard configures
+
+<Steps>
+  <Step title="Installs ts-patch">
+    The wizard installs `typescript` (pinned to the version Typia was tested against) and `ts-patch` as dev dependencies:
+
+    ```bash
+    npm install -D typescript ts-patch
+    ```
+  </Step>
+
+  <Step title="Adds a prepare script">
+    It adds `ts-patch install` to your `package.json` `prepare` script so TypeScript is patched on every `npm install`:
+
+    ```json
+    {
+      "scripts": {
+        "prepare": "ts-patch install"
+      }
+    }
+    ```
+
+    If a `prepare` script already exists, `ts-patch install` is prepended to it:
+
+    ```json
+    {
+      "scripts": {
+        "prepare": "ts-patch install && your-existing-prepare-command"
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Configures tsconfig.json">
+    The wizard adds the Typia transformer plugin to your `tsconfig.json` and enables the required compiler options:
+
+    ```json
+    {
+      "compilerOptions": {
+        "strict": true,
+        "skipLibCheck": true,
+        "plugins": [
+          {
+            "transform": "typia/lib/transform"
+          }
+        ]
+      }
+    }
+    ```
+
+    `strictNullChecks` must be `true` (or `strict: true`) for Typia's type analysis to work correctly.
+  </Step>
+
+  <Step title="Runs prepare">
+    Finally, the wizard runs `npm run prepare` (or the equivalent for your package manager) to patch TypeScript immediately.
+  </Step>
+</Steps>
+
+## Manual configuration
+
+If you prefer to configure Typia manually rather than using the wizard, follow these steps:
+
+<Steps>
+  <Step title="Install dependencies">
+    ```bash
+    npm install -D typescript ts-patch typia
+    ```
+  </Step>
+
+  <Step title="Patch TypeScript">
+    Add a `prepare` script to `package.json`:
+
+    ```json
+    {
+      "scripts": {
+        "prepare": "ts-patch install"
+      }
+    }
+    ```
+
+    Then run it:
+
+    ```bash
+    npm run prepare
+    ```
+  </Step>
+
+  <Step title="Configure tsconfig.json">
+    Add the transformer to your `tsconfig.json`:
+
+    ```json
+    {
+      "compilerOptions": {
+        "strict": true,
+        "skipLibCheck": true,
+        "plugins": [
+          {
+            "transform": "typia/lib/transform"
+          }
+        ]
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## The typia patch command
+
+TypeScript v5.3 changed how `tsc` parses JSDoc comments, which breaks Typia's ability to read JSDoc `@tag` annotations. The `typia patch` command restores JSDoc parsing by patching the `tsc.js` binary:
+
+```bash
+npx typia patch
+```
+
+<Warning>
+The `npx typia setup` wizard already handles this automatically as part of its `ts-patch install` step. You only need `typia patch` if you are on an older setup that predates the wizard, or if you have manually reinstalled TypeScript without running `prepare`.
+</Warning>
+
+Internally, the patch changes the default JSDoc parsing mode in TypeScript from `ParseForTypeErrors` to `ParseAll`:
+
+```
+// Before
+var defaultJSDocParsingMode = 2 /* ParseForTypeErrors */
+
+// After
+var defaultJSDocParsingMode = 0 /* ParseAll */
+```
+
+## Supported TypeScript versions
+
+Typia pins a specific TypeScript version as a devDependency and is tested against that version. The setup wizard installs that pinned version automatically. Using a significantly newer or older TypeScript release may cause the transformer to fail.
+
+Run `npm ls typescript` to verify the installed version matches what Typia expects.
+
+## Multiple tsconfig files
+
+If your project has multiple `tsconfig.json` files (e.g. `tsconfig.json` and `tsconfig.test.json`), run the wizard with the `--project` flag for each one that needs the transformer:
+
+```bash
+npx typia setup --project tsconfig.json
+npx typia setup --project tsconfig.test.json
+```
+
+<CardGroup cols={2}>
+  <Card title="@typia/unplugin" href="/integrations/unplugin">
+    Use a bundler plugin instead of ts-patch for Vite, Webpack, and Next.js
+  </Card>
+  <Card title="Concepts" href="/concepts">
+    Understand how Typia's compile-time transformation works
+  </Card>
+</CardGroup>
